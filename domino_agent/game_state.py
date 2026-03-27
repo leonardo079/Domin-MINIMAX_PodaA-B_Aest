@@ -1,7 +1,13 @@
 import random
 from dataclasses import dataclass, field
-from typing import Optional, Dict, List
+from typing import Optional, List, Tuple
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  Tile: ficha de dominó. Valor canónico: min(a,b) | max(a,b).
+#  En la mano se guarda en forma canónica.
+#  En el tablero se guarda como OrientedTile para respetar la cadena visual.
+# ──────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class Tile:
@@ -11,9 +17,13 @@ class Tile:
     def fits(self, value: int) -> bool:
         return self.a == value or self.b == value
 
-    def oriented(self, value: int) -> tuple:
-        """Retorna (valor_conectado, valor_libre) para encajar con 'value'."""
-        if self.a == value:
+    def oriented(self, connect_value: int) -> Tuple[int, int]:
+        """
+        Retorna (conectado, libre) para encajar con connect_value.
+        Ejemplo: Tile(3,5).oriented(3) → (3, 5)  → libre = 5
+                 Tile(3,5).oriented(5) → (5, 3)  → libre = 3
+        """
+        if self.a == connect_value:
             return (self.a, self.b)
         return (self.b, self.a)
 
@@ -31,62 +41,138 @@ class Tile:
         return hash((min(self.a, self.b), max(self.a, self.b)))
 
 
+class OrientedTile:
+    """
+    Ficha orientada para el tablero.
+    left_val es el valor que queda hacia la izquierda del tablero,
+    right_val el que queda hacia la derecha.
+    Esto permite imprimir la cadena con la orientación correcta.
+    """
+    def __init__(self, left_val: int, right_val: int):
+        self.left_val  = left_val
+        self.right_val = right_val
+
+    def as_tile(self) -> Tile:
+        return Tile(min(self.left_val, self.right_val),
+                    max(self.left_val, self.right_val))
+
+    def __repr__(self):
+        return f"[{self.left_val}|{self.right_val}]"
+
+    def __eq__(self, other):
+        if isinstance(other, OrientedTile):
+            return ({self.left_val, self.right_val} ==
+                    {other.left_val, other.right_val})
+        if isinstance(other, Tile):
+            return ({self.left_val, self.right_val} ==
+                    {other.a, other.b})
+        return False
+
+    def __hash__(self):
+        return hash((min(self.left_val, self.right_val),
+                     max(self.left_val, self.right_val)))
+
+
 def generate_all_tiles() -> list:
     return [Tile(a, b) for a in range(7) for b in range(a, 7)]
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+#  GameState
+# ──────────────────────────────────────────────────────────────────────────────
+
 @dataclass
 class GameState:
+    # El tablero almacena OrientedTile para que la cadena visual sea correcta:
+    #   board[0].left_val  == left_end   (extremo izquierdo visible)
+    #   board[-1].right_val == right_end  (extremo derecho visible)
     board: list = field(default_factory=list)
-    left_end: Optional[int] = None
+    left_end:  Optional[int] = None
     right_end: Optional[int] = None
-    agent_hand: list = field(default_factory=list)
-    opponent_hand: list = field(default_factory=list)
-    pool: list = field(default_factory=list)
-    current_player: int = 0
-    pass_count: int = 0
-    history: list = field(default_factory=list)
-    agent_passes: list = field(default_factory=list)
-    opponent_passes: list = field(default_factory=list)
 
-    # --- Probabilistic knowledge (agent's perspective) ---
-    # Conjunto de fichas que el agente NO conoce (oponente + pozo)
+    agent_hand:    list = field(default_factory=list)
+    opponent_hand: list = field(default_factory=list)
+    pool:          list = field(default_factory=list)
+
+    current_player: int = 0
+    pass_count:     int = 0
+    history:        list = field(default_factory=list)
+    agent_passes:   list = field(default_factory=list)
+    opponent_passes:list = field(default_factory=list)
+
+    # Fichas no visibles para el agente (mano oponente + pozo)
     unknown_tiles: list = field(default_factory=list)
+
+    # ── Inicio de partida ──────────────────────────────────────────────────
 
     @classmethod
     def new_game(cls):
         tiles = generate_all_tiles()
         random.shuffle(tiles)
-        agent_hand = tiles[:7]
+        agent_hand    = tiles[:7]
         opponent_hand = tiles[7:14]
-        pool = tiles[14:]
+        pool          = tiles[14:]
 
-        agent_max = max((t for t in agent_hand if t.a == t.b), key=lambda t: t.a, default=None)
-        opp_max = max((t for t in opponent_hand if t.a == t.b), key=lambda t: t.a, default=None)
+        # ── Regla oficial de inicio ──────────────────────────────────────
+        # El jugador con el doble más alto EMPIEZA y coloca ese doble.
+        # Si nadie tiene doble, empieza quien tenga la ficha de mayor peso.
+        agent_doubles = [t for t in agent_hand if t.a == t.b]
+        opp_doubles   = [t for t in opponent_hand if t.a == t.b]
 
-        if agent_max and opp_max:
-            first = 0 if agent_max.a >= opp_max.a else 1
-        elif agent_max:
-            first = 0
-        elif opp_max:
-            first = 1
+        agent_best_double = max(agent_doubles, key=lambda t: t.a, default=None)
+        opp_best_double   = max(opp_doubles,   key=lambda t: t.a, default=None)
+
+        if agent_best_double and opp_best_double:
+            if agent_best_double.a >= opp_best_double.a:
+                first        = 0
+                opening_tile = agent_best_double
+                agent_hand   = [t for t in agent_hand if t != opening_tile]
+            else:
+                first        = 1
+                opening_tile = opp_best_double
+                opponent_hand = [t for t in opponent_hand if t != opening_tile]
+        elif agent_best_double:
+            first        = 0
+            opening_tile = agent_best_double
+            agent_hand   = [t for t in agent_hand if t != opening_tile]
+        elif opp_best_double:
+            first        = 1
+            opening_tile = opp_best_double
+            opponent_hand = [t for t in opponent_hand if t != opening_tile]
         else:
-            first = random.randint(0, 1)
+            # Nadie tiene doble: la ficha más pesada de cualquier mano abre
+            all_hand = agent_hand + opponent_hand
+            opening_tile = max(all_hand, key=lambda t: t.pips())
+            if opening_tile in agent_hand:
+                first     = 0
+                agent_hand = [t for t in agent_hand if t != opening_tile]
+            else:
+                first         = 1
+                opponent_hand = [t for t in opponent_hand if t != opening_tile]
 
-        # Desde la perspectiva del agente, las fichas desconocidas son oponente + pozo
+        # La ficha de apertura se orienta canónicamente (left=a, right=b, a<=b)
+        ot = OrientedTile(opening_tile.a, opening_tile.b)
+        board     = [ot]
+        left_end  = ot.left_val
+        right_end = ot.right_val
+
+        # El siguiente turno es del OTRO jugador (quien abrió ya jugó)
+        current = 1 - first
+
         unknown = list(opponent_hand) + list(pool)
 
         return cls(
+            board=board,
+            left_end=left_end,
+            right_end=right_end,
             agent_hand=agent_hand,
             opponent_hand=opponent_hand,
             pool=pool,
-            current_player=first,
+            current_player=current,
             unknown_tiles=unknown
         )
 
-    # ------------------------------------------------------------------ #
-    #  PROBABILIDADES DESDE LA PERSPECTIVA DEL AGENTE                     #
-    # ------------------------------------------------------------------ #
+    # ── Probabilidades desde perspectiva del agente ────────────────────────
 
     def pool_size(self) -> int:
         return len(self.pool)
@@ -95,122 +181,124 @@ class GameState:
         return len(self.opponent_hand)
 
     def unknown_size(self) -> int:
-        """Total de fichas que el agente no puede ver."""
         return len(self.unknown_tiles)
 
     def prob_tile_in_pool(self, tile: Tile) -> float:
-        """
-        Probabilidad de que una ficha específica esté en el pozo,
-        dado que el agente sabe que está en el conjunto 'unknown'.
-        Usa distribución uniforme sobre las fichas no observadas.
-        """
-        if tile in self.agent_hand or tile in self.board:
+        if tile in self.agent_hand:
             return 0.0
         total_unknown = self.unknown_size()
         if total_unknown == 0:
             return 0.0
-        pool_count = self.pool_size()
-        # P(en pozo) = tamaño_pozo / total_desconocidas
-        return pool_count / total_unknown
+        return self.pool_size() / total_unknown
 
     def prob_tile_in_opponent(self, tile: Tile) -> float:
-        """
-        Probabilidad de que una ficha esté en la mano del oponente.
-        Se refina con las pistas de los pases del oponente.
-        """
-        if tile in self.agent_hand or tile in self.board:
+        if tile in self.agent_hand:
             return 0.0
         total_unknown = self.unknown_size()
         if total_unknown == 0:
             return 0.0
         opp_size = self.opponent_hand_size()
-
-        # Reducir probabilidad si el oponente pasó en un turno donde la ficha hubiera sido jugable
         penalty = 1.0
         if self.opponent_passes:
-            # Si el oponente pasó cuando los extremos coincidían con pips de la ficha,
-            # es menos probable que la tenga
             passed_at = set(self.opponent_passes)
             if tile.a in passed_at or tile.b in passed_at:
-                penalty = 0.3  # reducción significativa
-
-        base_prob = (opp_size / total_unknown) * penalty
-        return min(1.0, base_prob)
+                penalty = 0.3
+        return min(1.0, (opp_size / total_unknown) * penalty)
 
     def expected_pool_fits(self, end_value: int) -> float:
-        """
-        Número esperado de fichas en el pozo que encajan con 'end_value'.
-        Útil para decidir si vale la pena pasar para robar del pozo.
-        """
         if self.pool_size() == 0:
             return 0.0
-        fitting_unknown = sum(
-            1 for t in self.unknown_tiles if t.fits(end_value)
-        )
         total_unknown = self.unknown_size()
         if total_unknown == 0:
             return 0.0
-        # Esperanza: fichas_encajan_desconocidas * (pozo / total_desconocidas)
-        return fitting_unknown * (self.pool_size() / total_unknown)
+        fitting = sum(1 for t in self.unknown_tiles if t.fits(end_value))
+        return fitting * (self.pool_size() / total_unknown)
 
     def draw_from_pool(self, player: int) -> Optional[Tile]:
-        """
-        El jugador toma una ficha del pozo (si hay).
-        Actualiza unknown_tiles en consecuencia.
-        """
         if not self.pool:
             return None
         tile = self.pool.pop(0)
         if player == 0:
             self.agent_hand.append(tile)
-            # La ficha ya no es desconocida para el agente
             if tile in self.unknown_tiles:
                 self.unknown_tiles.remove(tile)
         else:
             self.opponent_hand.append(tile)
-            # Sigue siendo desconocida para el agente
         return tile
 
-    # ------------------------------------------------------------------ #
-    #  MÉTODOS ORIGINALES                                                  #
-    # ------------------------------------------------------------------ #
+    # ── Lógica de jugadas ──────────────────────────────────────────────────
 
     def valid_moves(self, hand: list) -> list:
-        """Retorna lista de (ficha, extremo) válidos."""
+        """
+        Retorna lista de (Tile, 'left'|'right') válidos.
+
+        - Si left_end == right_end: la ficha puede ir a ambos lados (se ofrecen
+          ambas opciones para que apply_move actualice el extremo correcto).
+        - Si left_end != right_end: cada lado es independiente.
+        """
         if self.left_end is None:
             return [(t, 'left') for t in hand]
+
         moves = []
         for tile in hand:
-            if tile.fits(self.left_end):
-                moves.append((tile, 'left'))
-            if tile.fits(self.right_end) and self.right_end != self.left_end:
-                moves.append((tile, 'right'))
-            elif tile.fits(self.right_end) and self.right_end == self.left_end:
-                if (tile, 'left') not in moves:
+            fits_left  = tile.fits(self.left_end)
+            fits_right = tile.fits(self.right_end)
+
+            if self.left_end == self.right_end:
+                if fits_left:
+                    moves.append((tile, 'left'))
+                    moves.append((tile, 'right'))
+            else:
+                if fits_left:
+                    moves.append((tile, 'left'))
+                if fits_right:
                     moves.append((tile, 'right'))
         return moves
 
-    def apply_move(self, tile: 'Tile', side: str, player: int) -> 'GameState':
+    def apply_move(self, tile: Tile, side: str, player: int) -> 'GameState':
+        """
+        Aplica el movimiento y retorna el nuevo estado.
+
+        La cadena del tablero se mantiene orientada:
+          board[0].left_val  == left_end
+          board[-1].right_val == right_end
+
+        Ejemplo (del enunciado):
+          Tablero: [1|3], extremos 1 ... 3
+          Jugar [3|4] en right:
+            oriented(3) → conectado=3, libre=4
+            OrientedTile(3, 4) → tablero: [1|3][3|4], right_end=4  ✓
+          Jugar [1|6] en left:
+            oriented(1) → conectado=1, libre=6
+            OrientedTile(6, 1) → tablero: [6|1][1|3][3|4], left_end=6  ✓
+        """
         import copy
         ns = copy.deepcopy(self)
         hand = ns.agent_hand if player == 0 else ns.opponent_hand
-
         hand[:] = [t for t in hand if not (t == tile)]
-
-        # La ficha jugada sale de unknown_tiles también
         ns.unknown_tiles = [t for t in ns.unknown_tiles if not (t == tile)]
 
         if ns.left_end is None:
-            ns.board.append(tile)
-            ns.left_end = tile.a
-            ns.right_end = tile.b
+            # Salvaguarda (no ocurre con new_game correcto)
+            ot = OrientedTile(tile.a, tile.b)
+            ns.board.append(ot)
+            ns.left_end  = ot.left_val
+            ns.right_end = ot.right_val
+
         elif side == 'left':
-            _, free = tile.oriented(ns.left_end)
-            ns.board.insert(0, tile)
+            # La ficha se conecta por su valor == left_end
+            # El valor libre queda a la IZQUIERDA (nuevo left_end)
+            connected, free = tile.oriented(ns.left_end)
+            ot = OrientedTile(free, connected)   # free | connected → left_end = free
+            ns.board.insert(0, ot)
             ns.left_end = free
-        else:
-            _, free = tile.oriented(ns.right_end)
-            ns.board.append(tile)
+
+        else:  # side == 'right'
+            # La ficha se conecta por su valor == right_end
+            # El valor libre queda a la DERECHA (nuevo right_end)
+            connected, free = tile.oriented(ns.right_end)
+            ot = OrientedTile(connected, free)   # connected | free → right_end = free
+            ns.board.append(ot)
             ns.right_end = free
 
         ns.pass_count = 0
@@ -218,17 +306,13 @@ class GameState:
         ns.current_player = 1 - player
         return ns
 
-    def apply_draw_and_play(self, player: int) -> 'GameState':
+    def apply_draw_and_play(self, player: int):
         """
-        Implementa la regla correcta del pozo:
-        El jugador roba fichas del pozo una a una hasta poder jugar o agotar el pozo.
-        Si después de robar puede jugar, retorna el estado con la mejor jugada aplicada.
-        Si no puede jugar tras agotar el pozo, retorna None (debe pasar).
-        Retorna (nuevo_estado, jugada) o (estado_con_robo, None).
+        Roba del pozo hasta poder jugar o agotar el pozo.
+        Retorna (nuevo_estado, jugadas_disponibles).
         """
         import copy
         ns = copy.deepcopy(self)
-        hand = ns.agent_hand if player == 0 else ns.opponent_hand
 
         while ns.pool:
             tile = ns.pool.pop(0)
@@ -243,9 +327,9 @@ class GameState:
             current_hand = ns.agent_hand if player == 0 else ns.opponent_hand
             moves = ns.valid_moves(current_hand)
             if moves:
-                return ns, moves  # tiene jugadas disponibles tras robar
+                return ns, moves
 
-        return ns, []  # agotó el pozo sin poder jugar
+        return ns, []
 
     def apply_pass(self, player: int) -> 'GameState':
         import copy
@@ -261,6 +345,8 @@ class GameState:
         ns.current_player = 1 - player
         return ns
 
+    # ── Estado terminal y ganador ──────────────────────────────────────────
+
     def is_terminal(self) -> bool:
         return (len(self.agent_hand) == 0 or
                 len(self.opponent_hand) == 0 or
@@ -274,7 +360,7 @@ class GameState:
         if len(self.opponent_hand) == 0:
             return 1
         agent_pips = sum(t.pips() for t in self.agent_hand)
-        opp_pips = sum(t.pips() for t in self.opponent_hand)
+        opp_pips   = sum(t.pips() for t in self.opponent_hand)
         if agent_pips < opp_pips:
             return 0
         elif opp_pips < agent_pips:
@@ -284,3 +370,7 @@ class GameState:
     def pip_sum(self, player: int) -> int:
         hand = self.agent_hand if player == 0 else self.opponent_hand
         return sum(t.pips() for t in hand)
+
+    def board_str(self) -> str:
+        """Cadena visual del tablero con orientación correcta."""
+        return " ".join(str(ot) for ot in self.board)
