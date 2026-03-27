@@ -1,6 +1,6 @@
 import random
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Dict, List
 
 
 @dataclass
@@ -37,17 +37,21 @@ def generate_all_tiles() -> list:
 
 @dataclass
 class GameState:
-    board: list = field(default_factory=list)      # fichas colocadas en orden
-    left_end: Optional[int] = None                  # extremo izquierdo activo
-    right_end: Optional[int] = None                 # extremo derecho activo
+    board: list = field(default_factory=list)
+    left_end: Optional[int] = None
+    right_end: Optional[int] = None
     agent_hand: list = field(default_factory=list)
     opponent_hand: list = field(default_factory=list)
     pool: list = field(default_factory=list)
-    current_player: int = 0                         # 0=agente, 1=oponente
-    pass_count: int = 0                             # pases consecutivos
-    history: list = field(default_factory=list)     # historial de jugadas
+    current_player: int = 0
+    pass_count: int = 0
+    history: list = field(default_factory=list)
     agent_passes: list = field(default_factory=list)
     opponent_passes: list = field(default_factory=list)
+
+    # --- Probabilistic knowledge (agent's perspective) ---
+    # Conjunto de fichas que el agente NO conoce (oponente + pozo)
+    unknown_tiles: list = field(default_factory=list)
 
     @classmethod
     def new_game(cls):
@@ -57,7 +61,6 @@ class GameState:
         opponent_hand = tiles[7:14]
         pool = tiles[14:]
 
-        # Determina quién empieza: el que tenga el doble más alto
         agent_max = max((t for t in agent_hand if t.a == t.b), key=lambda t: t.a, default=None)
         opp_max = max((t for t in opponent_hand if t.a == t.b), key=lambda t: t.a, default=None)
 
@@ -70,15 +73,110 @@ class GameState:
         else:
             first = random.randint(0, 1)
 
+        # Desde la perspectiva del agente, las fichas desconocidas son oponente + pozo
+        unknown = list(opponent_hand) + list(pool)
+
         return cls(
             agent_hand=agent_hand,
             opponent_hand=opponent_hand,
             pool=pool,
-            current_player=first
+            current_player=first,
+            unknown_tiles=unknown
         )
 
+    # ------------------------------------------------------------------ #
+    #  PROBABILIDADES DESDE LA PERSPECTIVA DEL AGENTE                     #
+    # ------------------------------------------------------------------ #
+
+    def pool_size(self) -> int:
+        return len(self.pool)
+
+    def opponent_hand_size(self) -> int:
+        return len(self.opponent_hand)
+
+    def unknown_size(self) -> int:
+        """Total de fichas que el agente no puede ver."""
+        return len(self.unknown_tiles)
+
+    def prob_tile_in_pool(self, tile: Tile) -> float:
+        """
+        Probabilidad de que una ficha específica esté en el pozo,
+        dado que el agente sabe que está en el conjunto 'unknown'.
+        Usa distribución uniforme sobre las fichas no observadas.
+        """
+        if tile in self.agent_hand or tile in self.board:
+            return 0.0
+        total_unknown = self.unknown_size()
+        if total_unknown == 0:
+            return 0.0
+        pool_count = self.pool_size()
+        # P(en pozo) = tamaño_pozo / total_desconocidas
+        return pool_count / total_unknown
+
+    def prob_tile_in_opponent(self, tile: Tile) -> float:
+        """
+        Probabilidad de que una ficha esté en la mano del oponente.
+        Se refina con las pistas de los pases del oponente.
+        """
+        if tile in self.agent_hand or tile in self.board:
+            return 0.0
+        total_unknown = self.unknown_size()
+        if total_unknown == 0:
+            return 0.0
+        opp_size = self.opponent_hand_size()
+
+        # Reducir probabilidad si el oponente pasó en un turno donde la ficha hubiera sido jugable
+        penalty = 1.0
+        if self.opponent_passes:
+            # Si el oponente pasó cuando los extremos coincidían con pips de la ficha,
+            # es menos probable que la tenga
+            passed_at = set(self.opponent_passes)
+            if tile.a in passed_at or tile.b in passed_at:
+                penalty = 0.3  # reducción significativa
+
+        base_prob = (opp_size / total_unknown) * penalty
+        return min(1.0, base_prob)
+
+    def expected_pool_fits(self, end_value: int) -> float:
+        """
+        Número esperado de fichas en el pozo que encajan con 'end_value'.
+        Útil para decidir si vale la pena pasar para robar del pozo.
+        """
+        if self.pool_size() == 0:
+            return 0.0
+        fitting_unknown = sum(
+            1 for t in self.unknown_tiles if t.fits(end_value)
+        )
+        total_unknown = self.unknown_size()
+        if total_unknown == 0:
+            return 0.0
+        # Esperanza: fichas_encajan_desconocidas * (pozo / total_desconocidas)
+        return fitting_unknown * (self.pool_size() / total_unknown)
+
+    def draw_from_pool(self, player: int) -> Optional[Tile]:
+        """
+        El jugador toma una ficha del pozo (si hay).
+        Actualiza unknown_tiles en consecuencia.
+        """
+        if not self.pool:
+            return None
+        tile = self.pool.pop(0)
+        if player == 0:
+            self.agent_hand.append(tile)
+            # La ficha ya no es desconocida para el agente
+            if tile in self.unknown_tiles:
+                self.unknown_tiles.remove(tile)
+        else:
+            self.opponent_hand.append(tile)
+            # Sigue siendo desconocida para el agente
+        return tile
+
+    # ------------------------------------------------------------------ #
+    #  MÉTODOS ORIGINALES                                                  #
+    # ------------------------------------------------------------------ #
+
     def valid_moves(self, hand: list) -> list:
-        """Retorna lista de (ficha, extremo) válidos. extremo: 'left' o 'right'."""
+        """Retorna lista de (ficha, extremo) válidos."""
         if self.left_end is None:
             return [(t, 'left') for t in hand]
         moves = []
@@ -92,14 +190,15 @@ class GameState:
                     moves.append((tile, 'right'))
         return moves
 
-    def apply_move(self, tile: Tile, side: str, player: int) -> 'GameState':
-        """Retorna un nuevo GameState resultado de aplicar la jugada."""
+    def apply_move(self, tile: 'Tile', side: str, player: int) -> 'GameState':
         import copy
         ns = copy.deepcopy(self)
         hand = ns.agent_hand if player == 0 else ns.opponent_hand
 
-        # Remover ficha de la mano
         hand[:] = [t for t in hand if not (t == tile)]
+
+        # La ficha jugada sale de unknown_tiles también
+        ns.unknown_tiles = [t for t in ns.unknown_tiles if not (t == tile)]
 
         if ns.left_end is None:
             ns.board.append(tile)
@@ -118,6 +217,35 @@ class GameState:
         ns.history.append({'player': player, 'tile': tile, 'side': side})
         ns.current_player = 1 - player
         return ns
+
+    def apply_draw_and_play(self, player: int) -> 'GameState':
+        """
+        Implementa la regla correcta del pozo:
+        El jugador roba fichas del pozo una a una hasta poder jugar o agotar el pozo.
+        Si después de robar puede jugar, retorna el estado con la mejor jugada aplicada.
+        Si no puede jugar tras agotar el pozo, retorna None (debe pasar).
+        Retorna (nuevo_estado, jugada) o (estado_con_robo, None).
+        """
+        import copy
+        ns = copy.deepcopy(self)
+        hand = ns.agent_hand if player == 0 else ns.opponent_hand
+
+        while ns.pool:
+            tile = ns.pool.pop(0)
+            if player == 0:
+                ns.agent_hand.append(tile)
+                if tile in ns.unknown_tiles:
+                    ns.unknown_tiles.remove(tile)
+            else:
+                ns.opponent_hand.append(tile)
+            ns.history.append({'player': player, 'tile': None, 'side': 'draw'})
+
+            current_hand = ns.agent_hand if player == 0 else ns.opponent_hand
+            moves = ns.valid_moves(current_hand)
+            if moves:
+                return ns, moves  # tiene jugadas disponibles tras robar
+
+        return ns, []  # agotó el pozo sin poder jugar
 
     def apply_pass(self, player: int) -> 'GameState':
         import copy
@@ -151,7 +279,7 @@ class GameState:
             return 0
         elif opp_pips < agent_pips:
             return 1
-        return -1  # empate
+        return -1
 
     def pip_sum(self, player: int) -> int:
         hand = self.agent_hand if player == 0 else self.opponent_hand

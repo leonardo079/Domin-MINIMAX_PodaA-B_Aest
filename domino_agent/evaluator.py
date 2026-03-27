@@ -40,14 +40,68 @@ def euclidean_distance(state, player: int = 0) -> float:
     return total / len(hand)
 
 
-def evaluate(state, player: int = 0,
-             w1: float = 0.4, w2: float = 0.3,
-             w3: float = 0.2, w4: float = 0.1,
-             use_manhattan: bool = True,
-             use_euclidean: bool = True) -> float:
+def pool_opportunity_score(state, player: int = 0) -> float:
     """
-    f(s) = w1·pip_score + w2·control_ends + w3·block_score + w4·dist_score
+    NUEVA MÉTRICA: Valor esperado de robar del pozo.
+
+    Calcula la probabilidad de que al menos una ficha del pozo
+    sea jugable en los extremos actuales del tablero.
+    Rango: [0, 1]. 1 = muy probable encontrar ficha útil en el pozo.
+    """
+    if state.left_end is None or state.pool_size() == 0:
+        return 0.0
+
+    expected_left = state.expected_pool_fits(state.left_end)
+    expected_right = state.expected_pool_fits(state.right_end)
+
+    # Probabilidad de encontrar al menos una ficha útil (aproximación)
+    best_expected = max(expected_left, expected_right)
+    # Normalizar: máximo teórico ~7 fichas por valor
+    return min(1.0, best_expected / 3.0)
+
+
+def opponent_blocking_score(state, player: int = 0) -> float:
+    """
+    NUEVA MÉTRICA: Penalización probabilística basada en fichas que el oponente
+    probablemente tiene y pueden bloquear al agente.
+
+    Usa las probabilidades del pozo para inferir fuerza del oponente.
+    """
+    if state.left_end is None:
+        return 0.0
+
+    opponent = 1 - player
+    opp_hand = state.opponent_hand if player == 0 else state.agent_hand
+
+    if not opp_hand:
+        return 1.0
+
+    # Fichas del oponente que encajan en extremos actuales
+    opp_fits = sum(1 for t in opp_hand
+                   if t.fits(state.left_end) or t.fits(state.right_end))
+
+    # Score: cuántas fichas del oponente son jugables
+    return opp_fits / max(len(opp_hand), 1)
+
+
+def evaluate(state, player: int = 0,
+             w1: float = 0.35, w2: float = 0.25,
+             w3: float = 0.20, w4: float = 0.10,
+             w5: float = 0.10,
+             use_manhattan: bool = True,
+             use_euclidean: bool = True,
+             use_pool: bool = True) -> float:
+    """
+    f(s) = w1·pip_score + w2·control_ends + w3·block_score
+           + w4·dist_score + w5·pool_score
+
     Retorna valor en [-1, 1]. Positivo = favorable para el agente.
+
+    Parámetros:
+    -----------
+    use_pool : bool
+        Si True, incluye la métrica de oportunidad del pozo (w5).
+        Permite considerar las 28 fichas en la evaluación.
     """
     opponent = 1 - player
 
@@ -80,7 +134,7 @@ def evaluate(state, player: int = 0,
     divisor = 0
     if use_manhattan:
         m = manhattan_distance(state, player)
-        dist_score += -m / 6.0  # normaliza a [-1, 0]
+        dist_score += -m / 6.0
         divisor += 1
     if use_euclidean:
         e = euclidean_distance(state, player)
@@ -89,5 +143,18 @@ def evaluate(state, player: int = 0,
     if divisor > 0:
         dist_score /= divisor
 
-    f = w1 * pip_score + w2 * control_score + w3 * block_score + w4 * dist_score
+    # 5. pool_score: oportunidad de robar ficha útil del pozo (NUEVO)
+    pool_score = 0.0
+    if use_pool:
+        pool_score = pool_opportunity_score(state, player)
+        # Reajustar pesos para incluir w5
+        f = (w1 * pip_score + w2 * control_score +
+             w3 * block_score + w4 * dist_score +
+             w5 * pool_score)
+    else:
+        # Sin pool: redistribuir peso w5 entre los demás
+        total_w = w1 + w2 + w3 + w4
+        f = ((w1/total_w) * pip_score + (w2/total_w) * control_score +
+             (w3/total_w) * block_score + (w4/total_w) * dist_score)
+
     return max(-1.0, min(1.0, f))

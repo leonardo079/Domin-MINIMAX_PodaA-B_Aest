@@ -1,0 +1,13 @@
+# Entornos virtuales
+entorno/
+venv/
+.env/
+
+# Archivos compilados de Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Resultados
+results/
