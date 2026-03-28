@@ -1,22 +1,22 @@
 from typing import Optional, Tuple
-from game_state import GameState, Tile
-from strategies.base import AgentStrategy
-from evaluator import evaluate
+from app.core.game_state import GameState, Tile
+from app.strategies.base import AgentStrategy
+from app.core.evaluator import evaluate
 
 DEPTH = 4
 
 
-class ManhattanStrategy(AgentStrategy):
+class EuclideanStrategy(AgentStrategy):
 
     @property
     def name(self) -> str:
-        return "manhattan"
+        return "euclidean"
 
     def decide(self, state: GameState) -> Optional[Tuple[Tile, str]]:
         if self.profiler:
             self.profiler.start_turn()
 
-        moves = state.valid_moves(state.agent_hand)
+        moves = state.valid_moves(state.agent_hand if self.player == 0 else state.opponent_hand)
         if not moves:
             if self.profiler:
                 self.profiler.end_turn("pass")
@@ -47,7 +47,7 @@ class ManhattanStrategy(AgentStrategy):
             if self.profiler:
                 self.profiler.count_eval()
             return evaluate(state, self.player,
-                            use_manhattan=True, use_euclidean=False)
+                            use_manhattan=False, use_euclidean=True)
 
         hand = state.agent_hand if maximizing else state.opponent_hand
         player = self.player if maximizing else 1 - self.player

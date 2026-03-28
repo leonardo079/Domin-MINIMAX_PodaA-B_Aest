@@ -2,6 +2,8 @@
 entorno/
 venv/
 .env/
+domino_agent/.venv/
+
 
 # Archivos compilados de Python
 __pycache__/
