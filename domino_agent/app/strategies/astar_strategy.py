@@ -1,8 +1,9 @@
 import heapq
+import random
 from typing import Optional, Tuple
-from game_state import GameState, Tile
-from strategies.base import AgentStrategy
-from evaluator import manhattan_distance, euclidean_distance
+from app.core.game_state import GameState, Tile
+from app.strategies.base import AgentStrategy
+from app.core.evaluator import manhattan_distance, euclidean_distance
 
 MAX_NODES = 2000
 
@@ -17,15 +18,15 @@ class AStarStrategy(AgentStrategy):
         if self.profiler:
             self.profiler.start_turn()
 
-        moves = state.valid_moves(state.agent_hand)
+        hand = state.agent_hand if self.player == 0 else state.opponent_hand
+        moves = state.valid_moves(hand)
         if not moves:
             if self.profiler:
                 self.profiler.end_turn("pass")
             return None
 
-        # Heap: (f, g, id, state, first_move)
         counter = 0
-        initial_g = 7 - len(state.agent_hand)  # fichas ya colocadas
+        initial_g = 7 - len(hand)
         heap = []
 
         for tile, side in moves:
@@ -57,14 +58,13 @@ class AStarStrategy(AgentStrategy):
             if current_state.is_terminal():
                 break
 
-            # Expandir solo jugadas del agente (A* no modela oponente)
-            next_moves = current_state.valid_moves(current_state.agent_hand)
+            cur_hand = current_state.agent_hand if self.player == 0 else current_state.opponent_hand
+            next_moves = current_state.valid_moves(cur_hand)
             for tile, side in next_moves:
                 ns2 = current_state.apply_move(tile, side, self.player)
-                # Simula turno oponente con jugada aleatoria para avanzar estado
-                opp_moves = ns2.valid_moves(ns2.opponent_hand)
+                opp_hand = ns2.opponent_hand if self.player == 0 else ns2.agent_hand
+                opp_moves = ns2.valid_moves(opp_hand)
                 if opp_moves:
-                    import random
                     ot, os_ = random.choice(opp_moves)
                     ns2 = ns2.apply_move(ot, os_, 1 - self.player)
                 new_g = g + 1
@@ -80,7 +80,6 @@ class AStarStrategy(AgentStrategy):
         return best_move
 
     def _heuristic(self, state) -> float:
-        """h(n) combinando Manhattan y Euclidiana."""
         m = manhattan_distance(state, self.player)
         e = euclidean_distance(state, self.player)
         return (m + e) / 2.0

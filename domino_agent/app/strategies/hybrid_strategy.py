@@ -1,10 +1,10 @@
 from typing import Optional, Tuple
-from game_state import GameState, Tile
-from strategies.base import AgentStrategy
-from evaluator import evaluate, manhattan_distance, euclidean_distance
+from app.core.game_state import GameState, Tile
+from app.strategies.base import AgentStrategy
+from app.core.evaluator import evaluate, manhattan_distance, euclidean_distance
 
 DEPTH = 4
-TOP_K = 4  # A* filtra las K mejores jugadas antes de Minimax
+TOP_K = 4
 
 
 class HybridStrategy(AgentStrategy):
@@ -17,14 +17,15 @@ class HybridStrategy(AgentStrategy):
         if self.profiler:
             self.profiler.start_turn()
 
-        moves = state.valid_moves(state.agent_hand)
+        hand = state.agent_hand if self.player == 0 else state.opponent_hand
+        moves = state.valid_moves(hand)
         if not moves:
             if self.profiler:
                 self.profiler.end_turn("pass")
             return None
 
         # A*: ordenar jugadas por heurística f(n) = g + h
-        g = 7 - len(state.agent_hand)
+        g = 7 - len(hand)
         scored = []
         for tile, side in moves:
             ns = state.apply_move(tile, side, self.player)
@@ -67,7 +68,6 @@ class HybridStrategy(AgentStrategy):
         player = self.player if maximizing else 1 - self.player
         moves = state.valid_moves(hand)
 
-        # A* ordering dentro de Minimax también
         if moves:
             g_local = 7 - len(hand)
             scored = []

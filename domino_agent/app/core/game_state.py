@@ -1,12 +1,11 @@
 import random
+import copy
 from dataclasses import dataclass, field
 from typing import Optional, List, Tuple
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  Tile: ficha de dominó. Valor canónico: min(a,b) | max(a,b).
-#  En la mano se guarda en forma canónica.
-#  En el tablero se guarda como OrientedTile para respetar la cadena visual.
+#  Tile: ficha de dominó
 # ──────────────────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -18,11 +17,6 @@ class Tile:
         return self.a == value or self.b == value
 
     def oriented(self, connect_value: int) -> Tuple[int, int]:
-        """
-        Retorna (conectado, libre) para encajar con connect_value.
-        Ejemplo: Tile(3,5).oriented(3) → (3, 5)  → libre = 5
-                 Tile(3,5).oriented(5) → (5, 3)  → libre = 3
-        """
         if self.a == connect_value:
             return (self.a, self.b)
         return (self.b, self.a)
@@ -42,19 +36,18 @@ class Tile:
 
 
 class OrientedTile:
-    """
-    Ficha orientada para el tablero.
-    left_val es el valor que queda hacia la izquierda del tablero,
-    right_val el que queda hacia la derecha.
-    Esto permite imprimir la cadena con la orientación correcta.
-    """
+    """Ficha orientada para el tablero con cadena visual correcta."""
+
     def __init__(self, left_val: int, right_val: int):
-        self.left_val  = left_val
+        self.left_val = left_val
         self.right_val = right_val
 
     def as_tile(self) -> Tile:
         return Tile(min(self.left_val, self.right_val),
                     max(self.left_val, self.right_val))
+
+    def to_dict(self) -> dict:
+        return {"left": self.left_val, "right": self.right_val}
 
     def __repr__(self):
         return f"[{self.left_val}|{self.right_val}]"
@@ -83,24 +76,20 @@ def generate_all_tiles() -> list:
 
 @dataclass
 class GameState:
-    # El tablero almacena OrientedTile para que la cadena visual sea correcta:
-    #   board[0].left_val  == left_end   (extremo izquierdo visible)
-    #   board[-1].right_val == right_end  (extremo derecho visible)
     board: list = field(default_factory=list)
-    left_end:  Optional[int] = None
+    left_end: Optional[int] = None
     right_end: Optional[int] = None
 
-    agent_hand:    list = field(default_factory=list)
+    agent_hand: list = field(default_factory=list)
     opponent_hand: list = field(default_factory=list)
-    pool:          list = field(default_factory=list)
+    pool: list = field(default_factory=list)
 
     current_player: int = 0
-    pass_count:     int = 0
-    history:        list = field(default_factory=list)
-    agent_passes:   list = field(default_factory=list)
-    opponent_passes:list = field(default_factory=list)
+    pass_count: int = 0
+    history: list = field(default_factory=list)
+    agent_passes: list = field(default_factory=list)
+    opponent_passes: list = field(default_factory=list)
 
-    # Fichas no visibles para el agente (mano oponente + pozo)
     unknown_tiles: list = field(default_factory=list)
 
     # ── Inicio de partida ──────────────────────────────────────────────────
@@ -109,56 +98,48 @@ class GameState:
     def new_game(cls):
         tiles = generate_all_tiles()
         random.shuffle(tiles)
-        agent_hand    = tiles[:7]
+        agent_hand = tiles[:7]
         opponent_hand = tiles[7:14]
-        pool          = tiles[14:]
+        pool = tiles[14:]
 
-        # ── Regla oficial de inicio ──────────────────────────────────────
-        # El jugador con el doble más alto EMPIEZA y coloca ese doble.
-        # Si nadie tiene doble, empieza quien tenga la ficha de mayor peso.
         agent_doubles = [t for t in agent_hand if t.a == t.b]
-        opp_doubles   = [t for t in opponent_hand if t.a == t.b]
+        opp_doubles = [t for t in opponent_hand if t.a == t.b]
 
         agent_best_double = max(agent_doubles, key=lambda t: t.a, default=None)
-        opp_best_double   = max(opp_doubles,   key=lambda t: t.a, default=None)
+        opp_best_double = max(opp_doubles, key=lambda t: t.a, default=None)
 
         if agent_best_double and opp_best_double:
             if agent_best_double.a >= opp_best_double.a:
-                first        = 0
+                first = 0
                 opening_tile = agent_best_double
-                agent_hand   = [t for t in agent_hand if t != opening_tile]
+                agent_hand = [t for t in agent_hand if t != opening_tile]
             else:
-                first        = 1
+                first = 1
                 opening_tile = opp_best_double
                 opponent_hand = [t for t in opponent_hand if t != opening_tile]
         elif agent_best_double:
-            first        = 0
+            first = 0
             opening_tile = agent_best_double
-            agent_hand   = [t for t in agent_hand if t != opening_tile]
+            agent_hand = [t for t in agent_hand if t != opening_tile]
         elif opp_best_double:
-            first        = 1
+            first = 1
             opening_tile = opp_best_double
             opponent_hand = [t for t in opponent_hand if t != opening_tile]
         else:
-            # Nadie tiene doble: la ficha más pesada de cualquier mano abre
             all_hand = agent_hand + opponent_hand
             opening_tile = max(all_hand, key=lambda t: t.pips())
             if opening_tile in agent_hand:
-                first     = 0
+                first = 0
                 agent_hand = [t for t in agent_hand if t != opening_tile]
             else:
-                first         = 1
+                first = 1
                 opponent_hand = [t for t in opponent_hand if t != opening_tile]
 
-        # La ficha de apertura se orienta canónicamente (left=a, right=b, a<=b)
         ot = OrientedTile(opening_tile.a, opening_tile.b)
-        board     = [ot]
-        left_end  = ot.left_val
+        board = [ot]
+        left_end = ot.left_val
         right_end = ot.right_val
-
-        # El siguiente turno es del OTRO jugador (quien abrió ya jugó)
         current = 1 - first
-
         unknown = list(opponent_hand) + list(pool)
 
         return cls(
@@ -172,7 +153,7 @@ class GameState:
             unknown_tiles=unknown
         )
 
-    # ── Probabilidades desde perspectiva del agente ────────────────────────
+    # ── Probabilidades ─────────────────────────────────────────────────────
 
     def pool_size(self) -> int:
         return len(self.pool)
@@ -229,19 +210,12 @@ class GameState:
     # ── Lógica de jugadas ──────────────────────────────────────────────────
 
     def valid_moves(self, hand: list) -> list:
-        """
-        Retorna lista de (Tile, 'left'|'right') válidos.
-
-        - Si left_end == right_end: la ficha puede ir a ambos lados (se ofrecen
-          ambas opciones para que apply_move actualice el extremo correcto).
-        - Si left_end != right_end: cada lado es independiente.
-        """
         if self.left_end is None:
             return [(t, 'left') for t in hand]
 
         moves = []
         for tile in hand:
-            fits_left  = tile.fits(self.left_end)
+            fits_left = tile.fits(self.left_end)
             fits_right = tile.fits(self.right_end)
 
             if self.left_end == self.right_end:
@@ -256,48 +230,26 @@ class GameState:
         return moves
 
     def apply_move(self, tile: Tile, side: str, player: int) -> 'GameState':
-        """
-        Aplica el movimiento y retorna el nuevo estado.
-
-        La cadena del tablero se mantiene orientada:
-          board[0].left_val  == left_end
-          board[-1].right_val == right_end
-
-        Ejemplo (del enunciado):
-          Tablero: [1|3], extremos 1 ... 3
-          Jugar [3|4] en right:
-            oriented(3) → conectado=3, libre=4
-            OrientedTile(3, 4) → tablero: [1|3][3|4], right_end=4  ✓
-          Jugar [1|6] en left:
-            oriented(1) → conectado=1, libre=6
-            OrientedTile(6, 1) → tablero: [6|1][1|3][3|4], left_end=6  ✓
-        """
-        import copy
         ns = copy.deepcopy(self)
         hand = ns.agent_hand if player == 0 else ns.opponent_hand
         hand[:] = [t for t in hand if not (t == tile)]
         ns.unknown_tiles = [t for t in ns.unknown_tiles if not (t == tile)]
 
         if ns.left_end is None:
-            # Salvaguarda (no ocurre con new_game correcto)
             ot = OrientedTile(tile.a, tile.b)
             ns.board.append(ot)
-            ns.left_end  = ot.left_val
+            ns.left_end = ot.left_val
             ns.right_end = ot.right_val
 
         elif side == 'left':
-            # La ficha se conecta por su valor == left_end
-            # El valor libre queda a la IZQUIERDA (nuevo left_end)
             connected, free = tile.oriented(ns.left_end)
-            ot = OrientedTile(free, connected)   # free | connected → left_end = free
+            ot = OrientedTile(free, connected)
             ns.board.insert(0, ot)
             ns.left_end = free
 
         else:  # side == 'right'
-            # La ficha se conecta por su valor == right_end
-            # El valor libre queda a la DERECHA (nuevo right_end)
             connected, free = tile.oriented(ns.right_end)
-            ot = OrientedTile(connected, free)   # connected | free → right_end = free
+            ot = OrientedTile(connected, free)
             ns.board.append(ot)
             ns.right_end = free
 
@@ -307,11 +259,6 @@ class GameState:
         return ns
 
     def apply_draw_and_play(self, player: int):
-        """
-        Roba del pozo hasta poder jugar o agotar el pozo.
-        Retorna (nuevo_estado, jugadas_disponibles).
-        """
-        import copy
         ns = copy.deepcopy(self)
 
         while ns.pool:
@@ -332,7 +279,6 @@ class GameState:
         return ns, []
 
     def apply_pass(self, player: int) -> 'GameState':
-        import copy
         ns = copy.deepcopy(self)
         ns.pass_count += 1
         ns.history.append({'player': player, 'tile': None, 'side': None})
@@ -360,7 +306,7 @@ class GameState:
         if len(self.opponent_hand) == 0:
             return 1
         agent_pips = sum(t.pips() for t in self.agent_hand)
-        opp_pips   = sum(t.pips() for t in self.opponent_hand)
+        opp_pips = sum(t.pips() for t in self.opponent_hand)
         if agent_pips < opp_pips:
             return 0
         elif opp_pips < agent_pips:
@@ -372,5 +318,21 @@ class GameState:
         return sum(t.pips() for t in hand)
 
     def board_str(self) -> str:
-        """Cadena visual del tablero con orientación correcta."""
         return " ".join(str(ot) for ot in self.board)
+
+    def to_dict(self) -> dict:
+        return {
+            "board": [ot.to_dict() for ot in self.board],
+            "board_str": self.board_str(),
+            "left_end": self.left_end,
+            "right_end": self.right_end,
+            "hand_size_a": len(self.agent_hand),
+            "hand_size_b": len(self.opponent_hand),
+            "pool_size": self.pool_size(),
+            "current_player": self.current_player,
+            "pass_count": self.pass_count,
+            "is_terminal": self.is_terminal(),
+            "winner": self.winner(),
+            "pip_sum_a": self.pip_sum(0),
+            "pip_sum_b": self.pip_sum(1),
+        }
