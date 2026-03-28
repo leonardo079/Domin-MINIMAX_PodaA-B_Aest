@@ -163,6 +163,36 @@ async def stream_game(session_id: str, delay_ms: float = 0):
     )
 
 
+# ── Árbol de búsqueda del último turno ────────────────────────────────────────
+
+@router.get("/{session_id}/tree")
+def get_tree(session_id: str):
+    """
+    Retorna el árbol de búsqueda generado por cada agente en su último turno.
+
+    Estructura de respuesta:
+      tree_a — árbol del agente A (siempre IA)
+      tree_b — árbol del agente B (IA en agent_vs_agent, null si jugó el humano)
+
+    Cada árbol contiene una lista de nodos con:
+      id, parent_id, depth, node_type, move, alpha, beta, value, pruned
+
+    node_type valores:
+      "ROOT"          — raíz de decisión
+      "MAX"/"MIN"     — nodos Minimax (α-β en Manhattan / Euclidean / Hybrid)
+      "PRUNED"        — marcador de ramas cortadas por α-β
+      "ASTAR"         — nodo en búsqueda A* (alpha=f, beta=h, value=g)
+      "ASTAR_PHASE"   — fase de ranking A* en Hybrid
+      "ASTAR_RANK"    — candidato clasificado en la fase A* del Hybrid
+      "MINIMAX_PHASE" — fase Minimax α-β en Hybrid
+      "RANDOM"        — jugada disponible en RandomStrategy
+    """
+    session = game_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+    return session.get_last_trees()
+
+
 # ── Historial de turnos ────────────────────────────────────────────────────────
 
 @router.get("/{session_id}/history")
