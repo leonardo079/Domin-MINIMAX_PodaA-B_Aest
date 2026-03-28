@@ -1,14 +1,11 @@
 from abc import ABC, abstractmethod
 from typing import Optional, Tuple
-from game_state import GameState, Tile
-from profiler import CostProfiler
+from app.core.game_state import GameState, Tile
+from app.core.profiler import CostProfiler
 
 
 class AgentStrategy(ABC):
-    """
-    Interfaz que toda estrategia debe implementar.
-    decide() recibe el estado actual y retorna (ficha, extremo) o None si pasa.
-    """
+    """Interfaz que toda estrategia debe implementar."""
 
     def __init__(self, player: int = 0):
         self.player = player
@@ -19,9 +16,7 @@ class AgentStrategy(ABC):
 
     @abstractmethod
     def decide(self, state: GameState) -> Optional[Tuple[Tile, str]]:
-        """
-        Retorna (Tile, 'left'|'right') o None si el agente pasa.
-        """
+        """Retorna (Tile, 'left'|'right') o None si el agente pasa."""
         pass
 
     @property

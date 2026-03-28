@@ -1,7 +1,7 @@
 import random
 from typing import Optional, Tuple
-from game_state import GameState, Tile
-from strategies.base import AgentStrategy
+from app.core.game_state import GameState, Tile
+from app.strategies.base import AgentStrategy
 
 
 class RandomStrategy(AgentStrategy):
@@ -14,7 +14,7 @@ class RandomStrategy(AgentStrategy):
         if self.profiler:
             self.profiler.start_turn()
 
-        moves = state.valid_moves(state.agent_hand)
+        moves = state.valid_moves(state.agent_hand if self.player == 0 else state.opponent_hand)
 
         if self.profiler:
             self.profiler.count_node()
