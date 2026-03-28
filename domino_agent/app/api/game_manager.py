@@ -10,6 +10,7 @@ import uuid
 from typing import Optional
 from app.core.game_state import GameState
 from app.core.profiler import CostProfiler
+from app.core.tree_recorder import TreeRecorder
 from app.strategies import STRATEGIES, STRATEGY_DESCRIPTIONS
 
 
@@ -28,6 +29,14 @@ class GameSession:
         self.sb = STRATEGIES[strategy_b](player=1)
         self.sa.set_profiler(self.prof_a)
         self.sb.set_profiler(self.prof_b)
+
+        # Árboles de búsqueda — uno por agente
+        self.tree_rec_a = TreeRecorder()
+        self.tree_rec_b = TreeRecorder()
+        self.sa.set_tree_recorder(self.tree_rec_a)
+        self.sb.set_tree_recorder(self.tree_rec_b)
+        self.last_tree_a: Optional[dict] = None
+        self.last_tree_b: Optional[dict] = None
 
         self.turn: int = 0
         self.status: str = "active"     # "active" | "finished"
@@ -63,8 +72,14 @@ class GameSession:
             self.state, moves = self.state.apply_draw_and_play(cur)
             drew = True
 
-        # Decidir jugada
+        # Decidir jugada (el recorder interno ya fue reseteado en decide())
         result = strat.decide(self.state)
+
+        # Capturar snapshot del árbol generado en este turno
+        if cur == 0:
+            self.last_tree_a = self.tree_rec_a.to_dict()
+        else:
+            self.last_tree_b = self.tree_rec_b.to_dict()
 
         if result is None:
             move_str = "pass"
@@ -265,6 +280,18 @@ class GameSession:
             "metrics_b": self.prof_b.all_metrics_list(),
             "summary_a": self.prof_a.summary(),
             "summary_b": self.prof_b.summary(),
+        }
+
+    def get_last_trees(self) -> dict:
+        """Retorna los árboles de búsqueda del último turno de cada agente."""
+        return {
+            "session_id":  self.session_id,
+            "strategy_a":  self.strategy_a_name,
+            "strategy_b":  self.strategy_b_name,
+            "game_mode":   self.game_mode,
+            "turn":        self.turn,
+            "tree_a":      self.last_tree_a,   # árbol del agente A (siempre IA)
+            "tree_b":      self.last_tree_b,   # árbol del agente B (IA o None si human)
         }
 
     def to_info(self) -> dict:

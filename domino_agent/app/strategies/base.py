@@ -10,9 +10,14 @@ class AgentStrategy(ABC):
     def __init__(self, player: int = 0):
         self.player = player
         self.profiler: Optional[CostProfiler] = None
+        self.tree_recorder = None   # instancia de TreeRecorder, opcional
 
     def set_profiler(self, profiler: CostProfiler):
         self.profiler = profiler
+
+    def set_tree_recorder(self, recorder) -> None:
+        """Asocia un TreeRecorder para registrar el árbol de búsqueda."""
+        self.tree_recorder = recorder
 
     @abstractmethod
     def decide(self, state: GameState) -> Optional[Tuple[Tile, str]]:
