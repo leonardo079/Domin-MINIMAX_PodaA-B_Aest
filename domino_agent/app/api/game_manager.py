@@ -14,10 +14,12 @@ from app.strategies import STRATEGIES, STRATEGY_DESCRIPTIONS
 
 
 class GameSession:
-    def __init__(self, session_id: str, strategy_a: str, strategy_b: str):
+    def __init__(self, session_id: str, strategy_a: str, strategy_b: str,
+                 game_mode: str = "agent_vs_agent"):
         self.session_id = session_id
         self.strategy_a_name = strategy_a
         self.strategy_b_name = strategy_b
+        self.game_mode = game_mode
 
         self.state = GameState.new_game()
         self.prof_a = CostProfiler(strategy_a)
