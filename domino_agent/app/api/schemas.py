@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class StrategyName(str, Enum):
@@ -11,11 +11,35 @@ class StrategyName(str, Enum):
     hybrid = "hybrid"
 
 
+class GameMode(str, Enum):
+    agent_vs_agent = "agent_vs_agent"
+    agent_vs_human = "agent_vs_human"
+
+
 # ── Game requests ──────────────────────────────────────────────────────────────
 
 class NewGameRequest(BaseModel):
-    strategy_a: StrategyName = Field(..., description="Estrategia del jugador A (player 0)")
-    strategy_b: StrategyName = Field(..., description="Estrategia del jugador B (player 1)")
+    strategy_a: StrategyName = Field(..., description="Estrategia del agente A (player 0 — siempre IA)")
+    strategy_b: Optional[StrategyName] = Field(
+        default=None,
+        description="Estrategia del agente B (player 1). Requerida en agent_vs_agent, ignorada en agent_vs_human.",
+    )
+    game_mode: GameMode = Field(
+        default=GameMode.agent_vs_agent,
+        description="Modo: agent_vs_agent | agent_vs_human",
+    )
+
+    @model_validator(mode="after")
+    def check_strategy_b_required(self):
+        if self.game_mode == GameMode.agent_vs_agent and self.strategy_b is None:
+            raise ValueError("strategy_b es requerida en modo agent_vs_agent")
+        return self
+
+
+class HumanMoveRequest(BaseModel):
+    tile_a: int = Field(..., ge=0, le=6, description="Valor izquierdo de la ficha")
+    tile_b: int = Field(..., ge=0, le=6, description="Valor derecho de la ficha")
+    side: str = Field(..., pattern="^(left|right)$", description="Extremo del tablero donde jugar")
 
 
 # ── Per-turn metrics ───────────────────────────────────────────────────────────

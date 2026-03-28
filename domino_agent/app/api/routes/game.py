@@ -15,7 +15,7 @@ import json
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app.api.schemas import NewGameRequest
+from app.api.schemas import NewGameRequest, HumanMoveRequest
 from app.api import game_manager
 
 router = APIRouter()
@@ -25,12 +25,15 @@ router = APIRouter()
 
 @router.post("/new")
 def new_game(request: NewGameRequest):
+    strategy_b = request.strategy_b.value if request.strategy_b else None
     session = game_manager.create_session(
         request.strategy_a.value,
-        request.strategy_b.value,
+        strategy_b,
+        request.game_mode.value,
     )
     return {
         "session_id": session.session_id,
+        "game_mode": session.game_mode,
         "strategy_a": session.strategy_a_name,
         "strategy_b": session.strategy_b_name,
         "status": session.status,
@@ -64,7 +67,51 @@ def step_game(session_id: str):
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
     if session.status == "finished":
         raise HTTPException(status_code=400, detail="La partida ya terminó")
-    event = session.step()
+    if session.status == "waiting_human":
+        raise HTTPException(status_code=400, detail="Es el turno del humano — usa POST /human-move")
+    try:
+        event = session.step()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return event
+
+
+# ── Turno del humano ───────────────────────────────────────────────────────────
+
+@router.post("/{session_id}/human-move")
+def human_move(session_id: str, request: HumanMoveRequest):
+    """
+    El humano envía su jugada. Solo válido en modo agent_vs_human
+    cuando status == 'waiting_human'.
+
+    Body: { "tile_a": 3, "tile_b": 5, "side": "right" }
+
+    Responde con el evento del turno y el estado actualizado,
+    incluyendo las jugadas válidas del humano si aún es su turno.
+    """
+    session = game_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+    try:
+        event = session.human_move(request.tile_a, request.tile_b, request.side)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return event
+
+
+@router.post("/{session_id}/human-pass")
+def human_pass(session_id: str):
+    """
+    El humano pasa su turno. Solo permitido cuando no hay jugadas
+    válidas ni fichas en el pozo.
+    """
+    session = game_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+    try:
+        event = session.human_pass()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return event
 
 
