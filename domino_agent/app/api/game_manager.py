@@ -19,14 +19,14 @@ class GameSession:
                  game_mode: str = "agent_vs_agent"):
         self.session_id = session_id
         self.strategy_a_name = strategy_a
-        self.strategy_b_name = strategy_b
+        self.strategy_b_name = strategy_b if strategy_b else "human"
         self.game_mode = game_mode
 
         self.state = GameState.new_game()
         self.prof_a = CostProfiler(strategy_a)
         self.prof_b = CostProfiler(strategy_b)
         self.sa = STRATEGIES[strategy_a](player=0)
-        self.sb = STRATEGIES[strategy_b](player=1)
+        self.sb = STRATEGIES[strategy_b](player=1) if strategy_b else STRATEGIES["random"](player=1)
         self.sa.set_profiler(self.prof_a)
         self.sb.set_profiler(self.prof_b)
 
