@@ -6,6 +6,8 @@ sin levantar un servidor real.
 """
 import pytest
 from httpx import AsyncClient
+from app.api import game_manager
+from app.core.game_state import OrientedTile, Tile
 
 
 # ── Root ───────────────────────────────────────────────────────────────────────
@@ -224,3 +226,62 @@ async def test_benchmark_matchups(client: AsyncClient):
     data = r.json()
     assert "matchups" in data
     assert len(data["matchups"]) == 5
+
+
+# ── POST /api/game/{id}/human-pass ───────────────────────────────────────────
+
+async def test_human_pass_draws_from_pool_when_no_valid_moves(client: AsyncClient):
+    created = await client.post("/api/game/new", json={
+        "strategy_a": "random",
+        "game_mode": "agent_vs_human",
+    })
+    assert created.status_code == 200
+    sid = created.json()["session_id"]
+
+    session = game_manager.get_session(sid)
+    assert session is not None
+    session.state.current_player = 1
+    session.status = "waiting_human"
+    session.state.board = [OrientedTile(6, 6)]
+    session.state.left_end = 6
+    session.state.right_end = 6
+    session.state.opponent_hand = [Tile(1, 2)]
+    session.state.pool = [Tile(3, 4), Tile(6, 1)]
+
+    action = await client.post(f"/api/game/{sid}/human-pass")
+    assert action.status_code == 200
+    event = action.json()
+    assert event["move"] == "draw_from_pool"
+    assert event["drew_from_pool"] is True
+
+    snapshot_res = await client.get(f"/api/game/{sid}")
+    assert snapshot_res.status_code == 200
+    snapshot = snapshot_res.json()
+    assert snapshot["status"] == "waiting_human"
+    assert snapshot["pool_size"] == 0
+    assert len(snapshot["human_valid_moves"]) > 0
+
+
+async def test_human_pass_succeeds_when_no_valid_moves_and_no_pool(client: AsyncClient):
+    created = await client.post("/api/game/new", json={
+        "strategy_a": "random",
+        "game_mode": "agent_vs_human",
+    })
+    assert created.status_code == 200
+    sid = created.json()["session_id"]
+
+    session = game_manager.get_session(sid)
+    assert session is not None
+    session.state.current_player = 1
+    session.status = "waiting_human"
+    session.state.board = [OrientedTile(6, 6)]
+    session.state.left_end = 6
+    session.state.right_end = 6
+    session.state.opponent_hand = [Tile(1, 2)]
+    session.state.pool = []
+
+    action = await client.post(f"/api/game/{sid}/human-pass")
+    assert action.status_code == 200
+    event = action.json()
+    assert event["move"] == "pass"
+    assert event["player"] == 1

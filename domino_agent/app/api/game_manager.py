@@ -15,26 +15,28 @@ from app.strategies import STRATEGIES, STRATEGY_DESCRIPTIONS
 
 
 class GameSession:
-    def __init__(self, session_id: str, strategy_a: str, strategy_b: str,
+    def __init__(self, session_id: str, strategy_a: str, strategy_b: Optional[str],
                  game_mode: str = "agent_vs_agent"):
         self.session_id = session_id
         self.strategy_a_name = strategy_a
-        self.strategy_b_name = strategy_b
+        self.strategy_b_name = strategy_b if strategy_b else "human"
         self.game_mode = game_mode
 
         self.state = GameState.new_game()
         self.prof_a = CostProfiler(strategy_a)
-        self.prof_b = CostProfiler(strategy_b)
+        self.prof_b = CostProfiler(self.strategy_b_name)
         self.sa = STRATEGIES[strategy_a](player=0)
-        self.sb = STRATEGIES[strategy_b](player=1)
+        self.sb = STRATEGIES[strategy_b](player=1) if strategy_b else None
         self.sa.set_profiler(self.prof_a)
-        self.sb.set_profiler(self.prof_b)
+        if self.sb:
+            self.sb.set_profiler(self.prof_b)
 
         # Árboles de búsqueda — uno por agente
         self.tree_rec_a = TreeRecorder()
         self.tree_rec_b = TreeRecorder()
         self.sa.set_tree_recorder(self.tree_rec_a)
-        self.sb.set_tree_recorder(self.tree_rec_b)
+        if self.sb:
+            self.sb.set_tree_recorder(self.tree_rec_b)
         self.last_tree_a: Optional[dict] = None
         self.last_tree_b: Optional[dict] = None
 
@@ -42,6 +44,10 @@ class GameSession:
         self.status: str = "active"     # "active" | "finished"
         self.winner_id: Optional[int] = None
         self.turn_history: list[dict] = []
+
+        # Si inicia el humano, exponer jugadas válidas desde el primer snapshot.
+        if self.game_mode == "agent_vs_human" and self.state.current_player == 1:
+            self.status = "waiting_human"
 
     # ── Ejecutar un turno (IA) ────────────────────────────────────────────────
 
@@ -192,7 +198,15 @@ class GameSession:
         return event
 
     def human_pass(self) -> dict:
-        """El humano pasa (sin jugadas ni pozo disponible)."""
+        """
+        Gestiona la accion "pasar" del humano.
+
+        Reglas:
+        - Si hay jugadas validas, no puede pasar.
+        - Si no hay jugadas y hay pozo, roba automaticamente hasta habilitar jugada
+          o vaciar el pozo.
+        - Solo pasa cuando no hay jugadas y el pozo ya esta vacio.
+        """
         if self.game_mode != "agent_vs_human":
             raise ValueError("Esta sesión no es de modo agent_vs_human")
         if self.state.current_player != 1:
@@ -200,8 +214,36 @@ class GameSession:
 
         hand = self.state.opponent_hand
         moves = self.state.valid_moves(hand)
-        if moves or self.state.pool:
-            raise ValueError("No puedes pasar si tienes jugadas disponibles o hay pozo")
+        if moves:
+            raise ValueError("No puedes pasar si tienes jugadas disponibles")
+
+        drew = False
+        if self.state.pool:
+            self.state, moves = self.state.apply_draw_and_play(1)
+            drew = True
+
+            if moves:
+                # El turno sigue siendo del humano: ahora tiene jugadas disponibles.
+                self.status = "waiting_human"
+                event = {
+                    "type": "turn",
+                    "turn": self.turn,
+                    "player": 1,
+                    "strategy": "human",
+                    "move": "draw_from_pool",
+                    "drew_from_pool": True,
+                    "board_length": len(self.state.board),
+                    "hand_size_a": len(self.state.agent_hand),
+                    "hand_size_b": len(self.state.opponent_hand),
+                    "pool_size": self.state.pool_size(),
+                    "left_end": self.state.left_end,
+                    "right_end": self.state.right_end,
+                    "board_str": self.state.board_str(),
+                    "metrics": None,
+                    "is_terminal": self.state.is_terminal(),
+                }
+                self.turn_history.append(event)
+                return event
 
         self.turn += 1
         self.state = self.state.apply_pass(1)
@@ -212,7 +254,7 @@ class GameSession:
             "player": 1,
             "strategy": "human",
             "move": "pass",
-            "drew_from_pool": False,
+            "drew_from_pool": drew,
             "board_length": len(self.state.board),
             "hand_size_a": len(self.state.agent_hand),
             "hand_size_b": len(self.state.opponent_hand),
@@ -262,7 +304,11 @@ class GameSession:
             **self.state.to_dict(),
         }
         # En modo humano, exponer las fichas y jugadas válidas del humano
-        if self.game_mode == "agent_vs_human" and self.status == "waiting_human":
+        if (
+            self.game_mode == "agent_vs_human"
+            and self.status != "finished"
+            and self.state.current_player == 1
+        ):
             hand = self.state.opponent_hand
             valid = self.state.valid_moves(hand)
             snap["human_hand"] = [{"a": t.a, "b": t.b, "pips": t.pips()} for t in hand]
