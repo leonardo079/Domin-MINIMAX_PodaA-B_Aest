@@ -198,7 +198,15 @@ class GameSession:
         return event
 
     def human_pass(self) -> dict:
-        """El humano pasa (sin jugadas ni pozo disponible)."""
+        """
+        Gestiona la accion "pasar" del humano.
+
+        Reglas:
+        - Si hay jugadas validas, no puede pasar.
+        - Si no hay jugadas y hay pozo, roba automaticamente hasta habilitar jugada
+          o vaciar el pozo.
+        - Solo pasa cuando no hay jugadas y el pozo ya esta vacio.
+        """
         if self.game_mode != "agent_vs_human":
             raise ValueError("Esta sesión no es de modo agent_vs_human")
         if self.state.current_player != 1:
@@ -206,8 +214,36 @@ class GameSession:
 
         hand = self.state.opponent_hand
         moves = self.state.valid_moves(hand)
-        if moves or self.state.pool:
-            raise ValueError("No puedes pasar si tienes jugadas disponibles o hay pozo")
+        if moves:
+            raise ValueError("No puedes pasar si tienes jugadas disponibles")
+
+        drew = False
+        if self.state.pool:
+            self.state, moves = self.state.apply_draw_and_play(1)
+            drew = True
+
+            if moves:
+                # El turno sigue siendo del humano: ahora tiene jugadas disponibles.
+                self.status = "waiting_human"
+                event = {
+                    "type": "turn",
+                    "turn": self.turn,
+                    "player": 1,
+                    "strategy": "human",
+                    "move": "draw_from_pool",
+                    "drew_from_pool": True,
+                    "board_length": len(self.state.board),
+                    "hand_size_a": len(self.state.agent_hand),
+                    "hand_size_b": len(self.state.opponent_hand),
+                    "pool_size": self.state.pool_size(),
+                    "left_end": self.state.left_end,
+                    "right_end": self.state.right_end,
+                    "board_str": self.state.board_str(),
+                    "metrics": None,
+                    "is_terminal": self.state.is_terminal(),
+                }
+                self.turn_history.append(event)
+                return event
 
         self.turn += 1
         self.state = self.state.apply_pass(1)
@@ -218,7 +254,7 @@ class GameSession:
             "player": 1,
             "strategy": "human",
             "move": "pass",
-            "drew_from_pool": False,
+            "drew_from_pool": drew,
             "board_length": len(self.state.board),
             "hand_size_a": len(self.state.agent_hand),
             "hand_size_b": len(self.state.opponent_hand),
