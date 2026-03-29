@@ -173,18 +173,34 @@ class GameState:
         return self.pool_size() / total_unknown
 
     def prob_tile_in_opponent(self, tile: Tile) -> float:
+        # 1. Verificación de exclusión: Si yo la tengo, él no 
         if tile in self.agent_hand:
             return 0.0
+            
         total_unknown = self.unknown_size()
         if total_unknown == 0:
             return 0.0
+            
         opp_size = self.opponent_hand_size()
+        pool_size = len(self.pool) # Asumiendo que self.pool es accesible 
+        
+        # 2. Cálculo de penalización dinámica basada en el pozo
+        # Si el oponente pasó, la probabilidad de que tenga la ficha se reduce
+        # proporcionalmente a la cantidad de fichas donde podría estar (el pozo) [cite: 134, 136]
         penalty = 1.0
         if self.opponent_passes:
-            passed_at = set(self.opponent_passes)
+            passed_at = set(self.opponent_passes) [cite: 136]
             if tile.a in passed_at or tile.b in passed_at:
-                penalty = 0.3
-        return min(1.0, (opp_size / total_unknown) * penalty)
+                # Si el pozo es grande, es muy poco probable que la tenga (penalización fuerte)
+                # Si el pozo es pequeño, la probabilidad sube ligeramente 
+                if pool_size > 0:
+                    penalty = 0.1 + (0.4 * (1 - (pool_size / 14))) # Rango dinámico ~0.1 a 0.5
+                else:
+                    penalty = 0.5 # Si no hay pozo y pasó, es un caso anómalo o bloqueo
+
+        # 3. Probabilidad base bayesiana combinada con la penalización 
+        base_prob = opp_size / total_unknown
+        return min(1.0, base_prob * penalty)
 
     def expected_pool_fits(self, end_value: int) -> float:
         if self.pool_size() == 0:
