@@ -112,9 +112,9 @@ def evaluate(
     pip_score = (opp_pips - agent_pips) / max_pips
 
     # 2. control_ends: fichas del agente que encajan en extremos actuales
+    opp_hand = state.opponent_hand if player == 0 else state.agent_hand
     if state.left_end is not None:
         agent_hand = state.agent_hand if player == 0 else state.opponent_hand
-        opp_hand = state.opponent_hand if player == 0 else state.agent_hand
         agent_fits = sum(1 for t in agent_hand
                          if t.fits(state.left_end) or t.fits(state.right_end))
         opp_fits = sum(1 for t in opp_hand
@@ -124,9 +124,7 @@ def evaluate(
         control_score = 0.0
 
     # 3. block_score: si el oponente tiene pocas jugadas válidas
-    opp_moves = state.valid_moves(
-        state.opponent_hand if player == 0 else state.agent_hand
-    )
+    opp_moves = state.valid_moves(opp_hand)
     block_score = 1.0 - (len(opp_moves) / max(len(opp_hand), 1))
 
     # 4. dist_score: combinación ponderada de distancias habilitadas
