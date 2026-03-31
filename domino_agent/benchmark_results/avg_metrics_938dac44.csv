@@ -1,0 +1,11 @@
+matchup,agent,role,avg_time_ms,avg_nodes,avg_evals,avg_depth,total_turns
+Minimax(Manhattan) vs Random,manhattan,A,13.333,37.8,13.9,4.3,932
+Minimax(Manhattan) vs Random,random,B,0.004,0.9,0.0,0.0,919
+A*(Manhattan) vs Random,astar,A,51.034,78.0,2.2,5.0,1026
+A*(Manhattan) vs Random,random,B,0.004,0.9,0.0,0.0,1017
+Manhattan vs Euclidean,manhattan,A,13.569,37.0,14.0,4.3,925
+Manhattan vs Euclidean,euclidean,B,14.243,38.7,14.9,4.3,931
+Hybrid vs Minimax(Manhattan),hybrid,A,3.362,11.2,4.6,2.8,889
+Hybrid vs Minimax(Manhattan),manhattan,B,15.452,41.8,16.5,4.4,891
+Hybrid vs Random,hybrid,A,3.704,12.3,5.2,2.8,897
+Hybrid vs Random,random,B,0.004,1.0,0.0,0.0,896

@@ -34,6 +34,18 @@ DEFAULT_TOURNAMENT = [
 ]
 
 
+def _safe_filename(label: str) -> str:
+    """Convierte el label del matchup en un nombre de archivo seguro."""
+    return (
+        label
+        .replace(" ", "_")
+        .replace("(", "")
+        .replace(")", "")
+        .replace("*", "star")
+        .replace("/", "_")
+    )
+
+
 def _run_matchup(tag: str, name_a: str, name_b: str, label: str, n_games: int) -> dict:
     """Ejecuta n_games partidas entre name_a y name_b; devuelve estadísticas."""
     wins = {0: 0, 1: 0, -1: 0}
@@ -79,13 +91,14 @@ def _run_matchup(tag: str, name_a: str, name_b: str, label: str, n_games: int) -
 
 def _export_benchmark_csv(results: list[dict], run_id: str) -> dict[str, str]:
     """
-    Exporta los resultados del benchmark en tres archivos CSV
+    Exporta los resultados del benchmark en archivos CSV
     optimizados para pgfplots en LaTeX/Overleaf.
 
     Archivos generados en benchmark_results/:
-      1. winrates_<run_id>.csv     — win rates por matchup
-      2. avg_metrics_<run_id>.csv  — métricas promedio por agente y matchup
-      3. turns_dist_<run_id>.csv   — duración y ventaja por partida
+      1. winrates_<run_id>.csv              — win rates por matchup
+      2. avg_metrics_<run_id>.csv           — métricas promedio por agente
+      3. turns_dist_<run_id>.csv            — todos los matchups juntos
+      4. turns_<label>_<run_id>.csv         — uno por cada matchup (para pgfplots)
     """
     RESULTS_DIR.mkdir(exist_ok=True)
     paths = {}
@@ -140,11 +153,14 @@ def _export_benchmark_csv(results: list[dict], run_id: str) -> dict[str, str]:
                 ])
     paths["avg_metrics"] = str(path_mt)
 
-    # ── 3. Distribución de duración de partidas ───────────────────────────
+    # ── 3. Todos los matchups juntos ──────────────────────────────────────
     path_td = RESULTS_DIR / f"turns_dist_{run_id}.csv"
     with open(path_td, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["matchup", "agent_a", "agent_b", "game_index", "turns", "score_advantage"])
+        writer.writerow([
+            "matchup", "agent_a", "agent_b",
+            "game_index", "turns", "score_advantage",
+        ])
         for r in results:
             for i, (t, s) in enumerate(
                 zip(r["turns_per_game"], r["score_advantage_per_game"])
@@ -158,6 +174,19 @@ def _export_benchmark_csv(results: list[dict], run_id: str) -> dict[str, str]:
                     s,
                 ])
     paths["turns_dist"] = str(path_td)
+
+    # ── 4. Un CSV individual por matchup (para pgfplots sin filtros) ──────
+    for r in results:
+        safe_label = _safe_filename(r["label"])
+        path_single = RESULTS_DIR / f"turns_{safe_label}_{run_id}.csv"
+        with open(path_single, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["game_index", "turns", "score_advantage"])
+            for i, (t, s) in enumerate(
+                zip(r["turns_per_game"], r["score_advantage_per_game"])
+            ):
+                writer.writerow([i + 1, t, s])
+        paths[f"turns_{safe_label}"] = str(path_single)
 
     return paths
 
