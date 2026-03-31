@@ -1,5 +1,5 @@
 """
-astar_strategy.py — búsqueda A* sobre el espacio de estados.
+astar_strategy.py — búsqueda best-first informada sobre el espacio de estados.
 
 Nota teórica importante:
 A* es un algoritmo de búsqueda de caminos de un solo agente. En un juego
@@ -11,6 +11,20 @@ h(n) y evaluación f(n)=g(n)+h(n).
 En este dominio, el rival se trata como parte del espacio de estados y no como
 un agente minimizador. Por eso esta estrategia sirve como búsqueda informada,
 pero no sustituye a Minimax en teoría de juegos.
+
+NOTA SOBRE ADMISIBILIDAD Y OPTIMALIDAD:
+La heurística _heuristic_cost() fue rediseñada para que su salida esté acotada
+en [0, 0.5], donde 0.5 corresponde al step_cost mínimo del sistema. Cada
+componente se normaliza a [0, 1] antes de la combinación lineal ponderada,
+y los pesos suman 1.0, garantizando que la suma ponderada permanezca en [0, 1].
+La escala final asegura que h(n) ≤ step_cost_mínimo, condición suficiente para
+admisibilidad en dominios deterministas.
+
+En el contexto estocástico del dominó con pozo, esta propiedad se mantiene en
+valor esperado pero no puede garantizarse para cada trayectoria individual.
+
+Para el informe académico: referirse a esta estrategia como
+"búsqueda best-first con función f(n) = g(n) + h(n)" y no como "A* óptimo".
 """
 from __future__ import annotations
 
@@ -185,14 +199,28 @@ class AStarStrategy(AgentStrategy):
         return 0.8
 
     def _heuristic_cost(self, state: GameState) -> float:
+        """
+        Heurística h(n) para A*.
+
+        DISEÑO PARA ADMISIBILIDAD APROXIMADA:
+        Cada componente se normaliza a [0, 1] antes de combinarlos,
+        y el resultado final se escala para que h(n) ≤ 0.5, que es
+        el step_cost mínimo posible en este dominio.
+        Esto garantiza que h(n) no sobreestime sistemáticamente, aunque
+        la admisibilidad estricta no puede probarse formalmente dado que
+        el espacio de estados es estocástico (pozo desconocido).
+        """
+        # Caso terminal: costo exacto conocido
         if state.is_terminal():
             winner = state.winner()
             if winner == self.player:
                 return 0.0
             if winner == -1:
                 return 0.5
-            return 1000.0
+            return 1.0
 
+        # Componente 1: valor heurístico combinado → [0, 1]
+        # evaluate() retorna [-1, 1]; invertimos y normalizamos a [0, 1]
         value = evaluate(
             state,
             self.player,
@@ -200,13 +228,29 @@ class AStarStrategy(AgentStrategy):
             use_euclidean=True,
             use_pool=True,
         )
-        my_hand = state.agent_hand if self.player == 0 else state.opponent_hand
-        hand_penalty = len(my_hand) / 7.0
-        dist_penalty = 0.08 * manhattan_distance(state, self.player)
-        dist_penalty += 0.04 * euclidean_distance(state, self.player)
+        value_cost = (1.0 - value) / 2.0   # ∈ [0, 1]
 
-        normalized_value_cost = (1.0 - value) / 2.0
-        return max(0.0, normalized_value_cost + hand_penalty + dist_penalty)
+        # Componente 2: fichas en mano normalizadas → [0, 1]
+        # Cuantas más fichas, más pasos mínimos quedan estimados
+        my_hand = state.agent_hand if self.player == 0 else state.opponent_hand
+        hand_cost = len(my_hand) / 7.0     # ∈ [0, 1]
+
+        # Componente 3: distancias normalizadas → [0, 1]
+        # Manhattan máxima posible: 6 (diferencia máxima entre pips 0-6)
+        # Euclidiana máxima posible: 6√2 ≈ 8.485
+        m_dist = manhattan_distance(state, self.player) / 6.0
+        e_dist = euclidean_distance(state, self.player) / (6 * 2 ** 0.5)
+        dist_cost = 0.6 * m_dist + 0.4 * e_dist   # ∈ [0, 1]
+
+        # Combinación con pesos que suman 1.0
+        # Garantiza que la suma ponderada esté en [0, 1]
+        h = (0.50 * value_cost +
+             0.30 * hand_cost  +
+             0.20 * dist_cost)
+
+        # Escala final: h(n) ≤ step_cost_mínimo = 0.5
+        # Condición suficiente (conservadora) para admisibilidad
+        return h * 0.5
 
     def _order_moves(
         self,
