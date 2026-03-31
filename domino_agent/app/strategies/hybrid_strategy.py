@@ -1,5 +1,22 @@
-import math
-from typing import Optional, Tuple
+"""
+hybrid_strategy.py — estrategia híbrida heurístico-adversarial.
+
+Enfoque:
+1. Se generan las jugadas válidas.
+2. Se calcula una heurística compuesta para cada jugada.
+3. Se seleccionan solo unas pocas candidatas de mayor calidad heurística.
+4. Sobre esas candidatas se ejecuta una verificación Minimax corta con poda alpha-beta.
+5. La decisión final combina principalmente la heurística y, en menor proporción,
+   la validación adversarial local.
+
+Este diseño es más apropiado para dominó con pozo que un Minimax profundo puro,
+porque da mayor peso a señales prácticas bajo información imperfecta y usa Minimax
+solo como corrector local, no como motor dominante.
+"""
+from __future__ import annotations
+
+from typing import List, Optional, Tuple
+
 from app.core.game_state import GameState, Tile
 from app.strategies.base import AgentStrategy
 from app.core.evaluator import (
@@ -10,11 +27,11 @@ from app.core.evaluator import (
     pool_opportunity_score,
 )
 
-MIN_DEPTH = 3
-BASE_DEPTH = 4
-MAX_DEPTH = 5
-TOP_K_MIN = 2
-TOP_K_MAX = 5
+# Configuración principal del híbrido
+CANDIDATE_COUNT = 4
+MINIMAX_VERIFY_DEPTH = 2
+HEURISTIC_WEIGHT = 0.72
+MINIMAX_WEIGHT = 0.28
 
 
 class HybridStrategy(AgentStrategy):
@@ -31,80 +48,188 @@ class HybridStrategy(AgentStrategy):
         if rec:
             rec.reset()
 
-        hand = state.agent_hand if self.player == 0 else state.opponent_hand
+        root_player = self.player
+        hand = state.agent_hand if root_player == 0 else state.opponent_hand
         moves = state.valid_moves(hand)
         if not moves:
             if self.profiler:
                 self.profiler.end_turn("pass")
             return None
 
-        # ── Nodo raíz ────────────────────────────────────────────────────────
         root_id = -1
         if rec:
-            root_id = rec.add_node(None, 0, "ROOT",
-                                   f"Turno jugador {self.player} (Híbrido)",
-                                   None, None)
+            root_id = rec.add_node(
+                None,
+                0,
+                "ROOT",
+                f"Turno jugador {self.player} (Hybrid)",
+                None,
+                None,
+            )
 
-        # Fase 1: A* ordering sobre jugadas candidatas.
-        search_depth = self._select_depth(state)
-        top_k = self._select_top_k(len(moves), search_depth)
-        g = 7 - len(hand)
-        astar_phase_id = -1
+        ranked = self._rank_moves(state, moves, root_player, root_id)
+        candidates = ranked[: min(CANDIDATE_COUNT, len(ranked))]
+
+        best_move = candidates[0][0]
+        best_final_score = float("-inf")
+        alpha = float("-inf")
+        beta = float("inf")
+
+        verify_parent = -1
         if rec:
-            astar_phase_id = rec.add_node(root_id if root_id >= 0 else None,
-                                          1, "ASTAR_PHASE",
-                                          f"Ranking A* ({len(moves)} candidatas, d={search_depth})",
-                                          None, None)
+            verify_parent = rec.add_node(
+                root_id if root_id >= 0 else None,
+                1,
+                "VERIFY",
+                f"Verificación Minimax corta sobre {len(candidates)} candidata(s)",
+                None,
+                None,
+            )
 
-        scored = []
-        for tile, side in moves:
-            ns = state.apply_move(tile, side, self.player)
-            h = self._heuristic(ns)
-            f_val = g + h
-            scored.append((f_val, (tile, side), ns))
+        for rank_idx, ((tile, side), next_state, heuristic_score, heuristic_node_id) in enumerate(candidates, start=1):
             if self.profiler:
                 self.profiler.count_node()
+
+            minimax_score = self._minimax(
+                state=next_state,
+                depth=MINIMAX_VERIFY_DEPTH,
+                alpha=alpha,
+                beta=beta,
+                current_player=1 - root_player,
+                maximizing=False,
+                _root_depth=MINIMAX_VERIFY_DEPTH + 1,
+                _parent_id=verify_parent if verify_parent >= 0 else heuristic_node_id,
+                _move_label=f"#{rank_idx} {tile}→{side}",
+            )
+
+            final_score = HEURISTIC_WEIGHT * heuristic_score + MINIMAX_WEIGHT * minimax_score
+
             if rec:
-                rec.add_node(astar_phase_id if astar_phase_id >= 0 else None,
-                             2, "ASTAR_RANK",
-                             f"{tile}\u2192{side}  f={f_val:.2f}",
-                             alpha=f_val, beta=round(h, 4), value=round(g, 4))
+                combo_id = rec.add_node(
+                    verify_parent if verify_parent >= 0 else root_id,
+                    2,
+                    "COMBINE",
+                    f"{tile}→{side}",
+                    round(heuristic_score, 4),
+                    round(minimax_score, 4),
+                )
+                rec.update_value(combo_id, round(final_score, 4))
 
-        scored.sort(key=lambda x: x[0])
-        top_moves = [(m, ns) for _, m, ns in scored[:top_k]]
-
-        # Fase 2: Minimax con poda alpha-beta sobre top-k.
-        mm_phase_id = -1
-        if rec:
-            mm_phase_id = rec.add_node(root_id if root_id >= 0 else None,
-                                       1, "MINIMAX_PHASE",
-                                       f"Minimax alpha-beta (top {top_k} candidatas, d={search_depth})",
-                                       None, None)
-
-        best_score = float('-inf')
-        best_move = top_moves[0][0]
-
-        for (tile, side), ns in top_moves:
-            if self.profiler:
-                self.profiler.count_node()
-            score = self._minimax(ns, search_depth - 1, float('-inf'), float('inf'), False,
-                                  _root_depth=search_depth,
-                                  _parent_id=mm_phase_id,
-                                  _move_label=f"{tile}\u2192{side}")
-            if score > best_score:
-                best_score = score
+            if final_score > best_final_score:
+                best_final_score = final_score
                 best_move = (tile, side)
+
+            alpha = max(alpha, best_final_score)
 
         if self.profiler:
             self.profiler.end_turn(str(best_move))
         return best_move
 
-    def _minimax(self, state, depth, alpha, beta, maximizing,
-                 _root_depth: int,
-                 _parent_id: int = -1, _move_label: str = "?"):
+    def _rank_moves(
+        self,
+        state: GameState,
+        moves: List[Tuple[Tile, str]],
+        player: int,
+        root_id: int,
+    ) -> List[Tuple[Tuple[Tile, str], GameState, float, int]]:
+        rec = self.tree_recorder
+        ranked: List[Tuple[Tuple[Tile, str], GameState, float, int]] = []
+
+        rank_parent = -1
+        if rec:
+            rank_parent = rec.add_node(
+                root_id if root_id >= 0 else None,
+                1,
+                "HEURISTIC_PHASE",
+                f"Ranking heurístico ({len(moves)} jugadas)",
+                None,
+                None,
+            )
+
+        for tile, side in moves:
+            next_state = state.apply_move(tile, side, player)
+            score = self._heuristic_move_score(state, next_state, tile)
+
+            node_id = rank_parent
+            if rec:
+                node_id = rec.add_node(
+                    rank_parent if rank_parent >= 0 else None,
+                    2,
+                    "HEURISTIC",
+                    f"{tile}→{side}",
+                    None,
+                    None,
+                )
+                rec.update_value(node_id, round(score, 4))
+
+            ranked.append(((tile, side), next_state, score, node_id))
+
+        ranked.sort(key=lambda item: item[2], reverse=True)
+        return ranked
+
+    def _heuristic_move_score(
+        self,
+        current_state: GameState,
+        next_state: GameState,
+        tile: Tile,
+    ) -> float:
+        """
+        Puntaje principal del híbrido.
+        Mayor es mejor.
+        La heurística pesa más que la verificación Minimax.
+        """
+        value = evaluate(
+            next_state,
+            self.player,
+            use_manhattan=True,
+            use_euclidean=True,
+            use_pool=True,
+        )
+        block = opponent_blocking_score(next_state, self.player)
+        pool = pool_opportunity_score(next_state, self.player) if next_state.pool_size() > 0 else 0.0
+        my_hand = next_state.agent_hand if self.player == 0 else next_state.opponent_hand
+        my_moves_after = len(next_state.valid_moves(my_hand))
+
+        m_dist = manhattan_distance(next_state, self.player)
+        e_dist = euclidean_distance(next_state, self.player)
+
+        # Incentivo por descargar fichas pesadas o dobles, útil en finales/bloqueos.
+        pip_value = self._tile_pip_value(tile)
+        t0, t1 = self._tile_values(tile)
+        double_bonus = 1.0 if t0 == t1 else 0.0
+
+        # Penalización suave si tras la jugada quedamos con poca movilidad.
+        mobility_penalty = 0.35 if my_moves_after <= 1 else 0.0
+
+        # Componente base normalizado con pesos prácticos para dominó con incertidumbre.
+        return (
+            0.46 * value
+            + 0.22 * block
+            + 0.10 * pool
+            + 0.10 * min(my_moves_after, 6) / 6.0
+            + 0.07 * min(pip_value, 12) / 12.0
+            + 0.05 * double_bonus
+            - 0.08 * min(m_dist, 12) / 12.0
+            - 0.04 * min(e_dist, 12.0) / 12.0
+            - mobility_penalty
+        )
+
+    def _minimax(
+        self,
+        state: GameState,
+        depth: int,
+        alpha: float,
+        beta: float,
+        current_player: int,
+        maximizing: bool,
+        _root_depth: int,
+        _parent_id: int = -1,
+        _move_label: str = "?",
+    ) -> float:
         rec = self.tree_recorder
         node_id = -1
         ply = _root_depth - depth
+
         if rec:
             node_type = "MAX" if maximizing else "MIN"
             node_id = rec.add_node(
@@ -112,8 +237,8 @@ class HybridStrategy(AgentStrategy):
                 ply,
                 node_type,
                 _move_label,
-                alpha if alpha != float('-inf') else None,
-                beta  if beta  != float('inf')  else None,
+                alpha if alpha != float("-inf") else None,
+                beta if beta != float("inf") else None,
             )
 
         if self.profiler:
@@ -123,104 +248,148 @@ class HybridStrategy(AgentStrategy):
         if depth == 0 or state.is_terminal():
             if self.profiler:
                 self.profiler.count_eval()
-            val = evaluate(state, self.player,
-                           use_manhattan=True, use_euclidean=True)
+            value = evaluate(
+                state,
+                self.player,
+                use_manhattan=True,
+                use_euclidean=True,
+                use_pool=True,
+            )
             if rec and node_id >= 0:
-                rec.update_value(node_id, val)
-            return val
+                rec.update_value(node_id, value)
+            return value
 
-        hand = state.agent_hand if maximizing else state.opponent_hand
-        player = self.player if maximizing else 1 - self.player
+        hand = state.agent_hand if current_player == 0 else state.opponent_hand
         moves = state.valid_moves(hand)
 
-        # A* ordering dentro del minimax
-        if moves:
-            g_local = 7 - len(hand)
-            scored = []
-            for tile, side in moves:
-                ns_temp = state.apply_move(tile, side, player)
-                h = self._heuristic(ns_temp)
-                scored.append((g_local + h, tile, side))
-            scored.sort(key=lambda x: x[0])
-            moves = [(t, s) for _, t, s in scored]
-
         if not moves:
-            ns = state.apply_pass(player)
-            val = self._minimax(ns, depth - 1, alpha, beta, not maximizing,
-                                _root_depth=_root_depth,
-                                _parent_id=node_id, _move_label="pass")
+            next_state = state.apply_pass(current_player)
+            value = self._minimax(
+                state=next_state,
+                depth=depth - 1,
+                alpha=alpha,
+                beta=beta,
+                current_player=1 - current_player,
+                maximizing=not maximizing,
+                _root_depth=_root_depth,
+                _parent_id=node_id,
+                _move_label="pass",
+            )
             if rec and node_id >= 0:
-                rec.update_value(node_id, val)
-            return val
+                rec.update_value(node_id, value)
+            return value
+
+        ordered_moves = self._order_moves_for_verify(state, moves, current_player, maximizing)
 
         if maximizing:
-            val = float('-inf')
-            for i, (tile, side) in enumerate(moves):
-                ns = state.apply_move(tile, side, player)
-                val = max(val, self._minimax(ns, depth - 1, alpha, beta, False,
-                                             _root_depth=_root_depth,
-                                             _parent_id=node_id,
-                                             _move_label=f"{tile}\u2192{side}"))
-                alpha = max(alpha, val)
+            value = float("-inf")
+            for i, (tile, side) in enumerate(ordered_moves):
+                next_state = state.apply_move(tile, side, current_player)
+                child_val = self._minimax(
+                    state=next_state,
+                    depth=depth - 1,
+                    alpha=alpha,
+                    beta=beta,
+                    current_player=1 - current_player,
+                    maximizing=False,
+                    _root_depth=_root_depth,
+                    _parent_id=node_id,
+                    _move_label=f"{tile}→{side}",
+                )
+                value = max(value, child_val)
+                alpha = max(alpha, value)
                 if beta <= alpha:
-                    remaining = len(moves) - i - 1
-                    if rec and node_id >= 0 and remaining > 0:
-                        rec.add_node(node_id, ply + 1, "PRUNED",
-                                     f"\u2702 {remaining} podado(s)",
-                                     alpha, beta, pruned=True)
+                    if rec and node_id >= 0 and i < len(ordered_moves) - 1:
+                        rec.add_node(
+                            node_id,
+                            ply + 1,
+                            "PRUNED",
+                            f"✂ {len(ordered_moves) - i - 1} podado(s)",
+                            alpha,
+                            beta,
+                            pruned=True,
+                        )
                     break
             if rec and node_id >= 0:
-                rec.update_value(node_id, val)
-            return val
-        else:
-            val = float('inf')
-            for i, (tile, side) in enumerate(moves):
-                ns = state.apply_move(tile, side, player)
-                val = min(val, self._minimax(ns, depth - 1, alpha, beta, True,
-                                             _root_depth=_root_depth,
-                                             _parent_id=node_id,
-                                             _move_label=f"{tile}\u2192{side}"))
-                beta = min(beta, val)
-                if beta <= alpha:
-                    remaining = len(moves) - i - 1
-                    if rec and node_id >= 0 and remaining > 0:
-                        rec.add_node(node_id, ply + 1, "PRUNED",
-                                     f"\u2702 {remaining} podado(s)",
-                                     alpha, beta, pruned=True)
-                    break
-            if rec and node_id >= 0:
-                rec.update_value(node_id, val)
-            return val
+                rec.update_value(node_id, value)
+            return value
 
-    def _heuristic(self, state) -> float:
-        m = manhattan_distance(state, self.player)
-        e = euclidean_distance(state, self.player)
-        pool = pool_opportunity_score(state, self.player)
-        block = opponent_blocking_score(state, self.player)
-        # Menor es mejor para A*: distancia pesa en contra, bloqueo/pozo favorecen.
-        return 0.45 * m + 0.45 * e - 0.05 * block - 0.05 * pool
+        value = float("inf")
+        for i, (tile, side) in enumerate(ordered_moves):
+            next_state = state.apply_move(tile, side, current_player)
+            child_val = self._minimax(
+                state=next_state,
+                depth=depth - 1,
+                alpha=alpha,
+                beta=beta,
+                current_player=1 - current_player,
+                maximizing=True,
+                _root_depth=_root_depth,
+                _parent_id=node_id,
+                _move_label=f"{tile}→{side}",
+            )
+            value = min(value, child_val)
+            beta = min(beta, value)
+            if beta <= alpha:
+                if rec and node_id >= 0 and i < len(ordered_moves) - 1:
+                    rec.add_node(
+                        node_id,
+                        ply + 1,
+                        "PRUNED",
+                        f"✂ {len(ordered_moves) - i - 1} podado(s)",
+                        alpha,
+                        beta,
+                        pruned=True,
+                    )
+                break
 
-    def _select_depth(self, state: GameState) -> int:
-        hand = state.agent_hand if self.player == 0 else state.opponent_hand
-        opp_hand = state.opponent_hand if self.player == 0 else state.agent_hand
+        if rec and node_id >= 0:
+            rec.update_value(node_id, value)
+        return value
 
-        my_mobility = len(state.valid_moves(hand))
-        opp_mobility = len(state.valid_moves(opp_hand))
-        pressure = max(0, opp_mobility - my_mobility)
+    def _order_moves_for_verify(
+        self,
+        state: GameState,
+        moves: List[Tuple[Tile, str]],
+        player: int,
+        maximizing: bool,
+    ) -> List[Tuple[Tile, str]]:
+        scored = []
+        for tile, side in moves:
+            next_state = state.apply_move(tile, side, player)
+            score = evaluate(
+                next_state,
+                self.player,
+                use_manhattan=True,
+                use_euclidean=True,
+                use_pool=True,
+            )
+            scored.append((score, (tile, side)))
 
-        depth = BASE_DEPTH
-        if len(hand) <= 3 or len(opp_hand) <= 3:
-            depth += 1
-        if state.pool_size() > 0 and pressure >= 2:
-            depth += 1
-        if my_mobility >= 8:
-            depth -= 1
-        if state.pool_size() == 0 and my_mobility <= 2:
-            depth -= 1
+        scored.sort(key=lambda item: item[0], reverse=maximizing)
+        return [move for _, move in scored]
 
-        return max(MIN_DEPTH, min(MAX_DEPTH, depth))
+    @staticmethod
+    def _tile_values(tile: Tile) -> Tuple[int, int]:
+        """
+        Soporta distintos formatos de ficha:
+        - objetos con atributos a/b
+        - objetos con atributos left/right o left_val/right_val
+        - tuplas/listas indexables
+        """
+        for left_name, right_name in (("a", "b"), ("left", "right"), ("left_val", "right_val")):
+            if hasattr(tile, left_name) and hasattr(tile, right_name):
+                try:
+                    return int(getattr(tile, left_name)), int(getattr(tile, right_name))
+                except Exception:
+                    pass
 
-    def _select_top_k(self, n_moves: int, search_depth: int) -> int:
-        ratio = 0.65 if search_depth <= BASE_DEPTH else 0.5
-        k = math.ceil(n_moves * ratio)
-        return max(TOP_K_MIN, min(TOP_K_MAX, k))
+        try:
+            return int(tile[0]), int(tile[1])
+        except Exception:
+            return 0, 0
+
+    @classmethod
+    def _tile_pip_value(cls, tile: Tile) -> int:
+        left, right = cls._tile_values(tile)
+        return left + right

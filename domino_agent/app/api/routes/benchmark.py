@@ -2,19 +2,20 @@
 routes/benchmark.py — Endpoints de benchmark/torneo entre estrategias.
 
 Endpoints:
-  POST  /api/benchmark/run          → ejecutar torneo (bloqueante, progreso via SSE)
-  GET   /api/benchmark/matchups     → matchups estándar disponibles
+  GET   /api/benchmark/matchups  → matchups estándar disponibles
+  POST  /api/benchmark/run       → torneo completo con progreso via SSE
 """
 import asyncio
 import json
 import time
 import uuid
+
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
 from app.api.schemas import BenchmarkRequest
-from app.core.game_state import GameState
 from app.core.profiler import CostProfiler
+from app.core.game_runner import play_full_game
 from app.strategies import STRATEGIES
 
 router = APIRouter()
@@ -28,46 +29,24 @@ DEFAULT_TOURNAMENT = [
 ]
 
 
-def _play_single_game(strategy_a: str, strategy_b: str) -> tuple:
-    """Juega una partida y retorna (winner, turns, pips_a, pips_b)."""
-    state = GameState.new_game()
-    prof_a = CostProfiler(strategy_a)
-    prof_b = CostProfiler(strategy_b)
-    sa = STRATEGIES[strategy_a](player=0)
-    sb = STRATEGIES[strategy_b](player=1)
-    sa.set_profiler(prof_a)
-    sb.set_profiler(prof_b)
-    turn = 0
-
-    while not state.is_terminal():
-        turn += 1
-        cur = state.current_player
-        strat = sa if cur == 0 else sb
-        hand = state.agent_hand if cur == 0 else state.opponent_hand
-        moves = state.valid_moves(hand)
-
-        if not moves and state.pool:
-            state, moves = state.apply_draw_and_play(cur)
-
-        result = strat.decide(state)
-        if result is None:
-            state = state.apply_pass(cur)
-        else:
-            tile, side = result
-            state = state.apply_move(tile, side, cur)
-
-    return state.winner(), turn, state.pip_sum(0), state.pip_sum(1), prof_a, prof_b
-
-
 def _run_matchup(tag: str, name_a: str, name_b: str, label: str, n_games: int) -> dict:
+    """Ejecuta n_games partidas entre name_a y name_b; devuelve estadísticas."""
     wins = {0: 0, 1: 0, -1: 0}
-    turns_list = []
-    score_advantage = []
+    turns_list: list[int] = []
+    score_advantage: list[int] = []
     combined_prof_a = CostProfiler(name_a)
     combined_prof_b = CostProfiler(name_b)
 
     for _ in range(n_games):
-        winner, turns, pa, pb, prof_a, prof_b = _play_single_game(name_a, name_b)
+        prof_a = CostProfiler(name_a)
+        prof_b = CostProfiler(name_b)
+        sa = STRATEGIES[name_a](player=0)
+        sb = STRATEGIES[name_b](player=1)
+        sa.set_profiler(prof_a)
+        sb.set_profiler(prof_b)
+
+        winner, turns, pa, pb = play_full_game(sa, sb, prof_a, prof_b)
+
         wins[winner] = wins.get(winner, 0) + 1
         turns_list.append(turns)
         score_advantage.append(pb - pa)
@@ -113,16 +92,11 @@ async def run_benchmark(request: BenchmarkRequest):
     Ejecuta el torneo y emite eventos SSE de progreso.
     Cada matchup emite un evento cuando termina.
     Al final emite el resumen completo.
-
-    Esto permite al frontend mostrar resultados parciales mientras corre.
     """
-    matchups = request.matchups
-    if not matchups:
-        matchups = [
-            {"tag": tag, "agent_a": a, "agent_b": b, "label": label}
-            for tag, a, b, label in DEFAULT_TOURNAMENT
-        ]
-
+    matchups = request.matchups or [
+        {"tag": tag, "agent_a": a, "agent_b": b, "label": label}
+        for tag, a, b, label in DEFAULT_TOURNAMENT
+    ]
     n_games = request.n_games
     run_id = str(uuid.uuid4())[:8]
 
@@ -139,16 +113,13 @@ async def run_benchmark(request: BenchmarkRequest):
             nb = m["agent_b"]
             label = m.get("label", f"{na} vs {nb}")
 
-            # Notificar inicio de matchup
             yield f"data: {json.dumps({'type': 'matchup_start', 'index': idx, 'tag': tag, 'label': label})}\n\n"
 
-            # Correr el matchup en executor (bloqueante, CPU intensivo)
             result = await loop.run_in_executor(
                 None, _run_matchup, tag, na, nb, label, n_games
             )
             all_results.append(result)
 
-            # Emitir resultado del matchup
             yield f"data: {json.dumps({'type': 'matchup_done', 'index': idx, **result})}\n\n"
 
         total_time = round(time.time() - t0, 2)
@@ -157,8 +128,5 @@ async def run_benchmark(request: BenchmarkRequest):
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

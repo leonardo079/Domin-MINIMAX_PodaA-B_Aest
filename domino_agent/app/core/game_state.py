@@ -186,10 +186,10 @@ class GameState:
         
         # 2. Cálculo de penalización dinámica basada en el pozo
         # Si el oponente pasó, la probabilidad de que tenga la ficha se reduce
-        # proporcionalmente a la cantidad de fichas donde podría estar (el pozo) [cite: 134, 136]
+        # proporcionalmente a la cantidad de fichas donde podría estar (el pozo) 
         penalty = 1.0
         if self.opponent_passes:
-            passed_at = set(self.opponent_passes) [cite: 136]
+            passed_at = set(self.opponent_passes)
             if tile.a in passed_at or tile.b in passed_at:
                 # Si el pozo es grande, es muy poco probable que la tenga (penalización fuerte)
                 # Si el pozo es pequeño, la probabilidad sube ligeramente 

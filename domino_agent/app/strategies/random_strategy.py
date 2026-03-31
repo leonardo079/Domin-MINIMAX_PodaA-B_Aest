@@ -1,5 +1,9 @@
+"""
+random_strategy.py — Baseline: jugada aleatoria entre las válidas.
+"""
 import random
 from typing import Optional, Tuple
+
 from app.core.game_state import GameState, Tile
 from app.strategies.base import AgentStrategy
 
@@ -23,29 +27,30 @@ class RandomStrategy(AgentStrategy):
 
         root_id = -1
         if rec:
-            root_id = rec.add_node(None, 0, "ROOT",
-                                   f"Turno jugador {self.player} (Random)",
-                                   None, None)
+            root_id = rec.add_node(
+                None, 0, "ROOT",
+                f"Turno jugador {self.player} (Random)",
+                None, None,
+            )
             for tile, side in moves:
-                rec.add_node(root_id, 1, "RANDOM", f"{tile}\u2192{side}",
-                             None, None)
-
-        if self.profiler:
-            self.profiler.count_node()
-            move_str = str(moves[0]) if moves else "pass"
-            self.profiler.end_turn(move_str)
+                rec.add_node(root_id, 1, "RANDOM", f"{tile}→{side}", None, None)
 
         if not moves:
+            if self.profiler:
+                self.profiler.end_turn("pass")
             return None
 
         chosen = random.choice(moves)
 
-        # Marcar la jugada elegida con value=1.0
         if rec:
-            label = f"{chosen[0]}\u2192{chosen[1]}"
+            label = f"{chosen[0]}→{chosen[1]}"
             for node in rec._nodes:
                 if node["node_type"] == "RANDOM" and node["move"] == label:
                     node["value"] = 1.0
                     break
+
+        if self.profiler:
+            self.profiler.count_node()
+            self.profiler.end_turn(str(chosen))
 
         return chosen

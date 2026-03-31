@@ -1,3 +1,15 @@
+"""
+evaluator.py — Funciones heurísticas para la evaluación de estados.
+
+Funciones exportadas:
+  manhattan_distance()       — distancia Manhattan mano ↔ extremos del tablero
+  euclidean_distance()       — distancia Euclidiana mano ↔ extremos del tablero
+  pool_opportunity_score()   — valor esperado de robar del pozo  [0, 1]
+  opponent_blocking_score()  — fracción de fichas rivales que encajan
+  evaluate()                 — heurística combinada ∈ [-1, 1]
+
+Todas las estrategias importan directamente desde aquí; no duplican lógica.
+"""
 import math
 
 
@@ -32,8 +44,8 @@ def euclidean_distance(state, player: int = 0) -> float:
     total = 0.0
     for tile in hand:
         best = min(
-            math.sqrt((tile.a - state.left_end)**2 + (tile.b - state.right_end)**2),
-            math.sqrt((tile.b - state.left_end)**2 + (tile.a - state.right_end)**2)
+            math.sqrt((tile.a - state.left_end) ** 2 + (tile.b - state.right_end) ** 2),
+            math.sqrt((tile.b - state.left_end) ** 2 + (tile.a - state.right_end) ** 2),
         )
         total += best
     return total / len(hand)
@@ -54,7 +66,7 @@ def pool_opportunity_score(state, player: int = 0) -> float:
 
 def opponent_blocking_score(state, player: int = 0) -> float:
     """
-    Penalización probabilística: fichas del oponente que bloquean al agente.
+    Penalización probabilística: fracción de fichas del oponente que encajan.
     """
     if state.left_end is None:
         return 0.0
@@ -66,18 +78,30 @@ def opponent_blocking_score(state, player: int = 0) -> float:
     return opp_fits / max(len(opp_hand), 1)
 
 
-def evaluate(state, player: int = 0,
-             w1: float = 0.35, w2: float = 0.25,
-             w3: float = 0.20, w4: float = 0.10,
-             w5: float = 0.10,
-             use_manhattan: bool = True,
-             use_euclidean: bool = True,
-             use_pool: bool = True) -> float:
+def evaluate(
+    state,
+    player: int = 0,
+    w1: float = 0.35,
+    w2: float = 0.25,
+    w3: float = 0.20,
+    w4: float = 0.10,
+    w5: float = 0.10,
+    use_manhattan: bool = True,
+    use_euclidean: bool = True,
+    use_pool: bool = True,
+) -> float:
     """
-    Función de evaluación heurística.
+    Función de evaluación heurística combinada.
+
     f(s) = w1·pip_score + w2·control_ends + w3·block_score
            + w4·dist_score + w5·pool_score
+
     Retorna valor en [-1, 1]. Positivo = favorable para el agente.
+
+    Parámetros de distancia:
+      use_manhattan  — incluir distancia Manhattan en dist_score
+      use_euclidean  — incluir distancia Euclidiana en dist_score
+      use_pool       — incluir oportunidad de pozo en el cómputo
     """
     opponent = 1 - player
 
@@ -103,24 +127,21 @@ def evaluate(state, player: int = 0,
     opp_moves = state.valid_moves(
         state.opponent_hand if player == 0 else state.agent_hand
     )
-    block_score = 1.0 - (len(opp_moves) / 28.0)
+    block_score = 1.0 - (len(opp_moves) / max(len(opp_hand), 1))
 
-    # 4. dist_score: basado en distancias (Manhattan y/o Euclidiana)
+    # 4. dist_score: combinación ponderada de distancias habilitadas
     dist_score = 0.0
     divisor = 0
     if use_manhattan:
-        m = manhattan_distance(state, player)
-        dist_score += -m / 6.0
+        dist_score += -manhattan_distance(state, player) / 6.0
         divisor += 1
     if use_euclidean:
-        e = euclidean_distance(state, player)
-        dist_score += -e / (6 * math.sqrt(2))
+        dist_score += -euclidean_distance(state, player) / (6 * math.sqrt(2))
         divisor += 1
     if divisor > 0:
         dist_score /= divisor
 
     # 5. pool_score: oportunidad de robar ficha útil del pozo
-    pool_score = 0.0
     if use_pool:
         pool_score = pool_opportunity_score(state, player)
         f = (w1 * pip_score + w2 * control_score +
