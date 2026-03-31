@@ -59,7 +59,7 @@ class HybridStrategy(AgentStrategy):
         scored = []
         for tile, side in moves:
             ns = state.apply_move(tile, side, self.player)
-            h = self._heuristic(ns)
+            h = self._heuristic(ns, state)   # ← ahora recibe state original también
             f_val = g + h
             scored.append((f_val, (tile, side), ns))
             if self.profiler:
@@ -90,7 +90,8 @@ class HybridStrategy(AgentStrategy):
             score = self._minimax(ns, search_depth - 1, float('-inf'), float('inf'), False,
                                   _root_depth=search_depth,
                                   _parent_id=mm_phase_id,
-                                  _move_label=f"{tile}\u2192{side}")
+                                  _move_label=f"{tile}\u2192{side}",
+                                  _original_state=state)   # ← pasamos estado original
             if score > best_score:
                 best_score = score
                 best_move = (tile, side)
@@ -101,7 +102,8 @@ class HybridStrategy(AgentStrategy):
 
     def _minimax(self, state, depth, alpha, beta, maximizing,
                  _root_depth: int,
-                 _parent_id: int = -1, _move_label: str = "?"):
+                 _parent_id: int = -1, _move_label: str = "?",
+                 _original_state: Optional[GameState] = None):
         rec = self.tree_recorder
         node_id = -1
         ply = _root_depth - depth
@@ -133,14 +135,27 @@ class HybridStrategy(AgentStrategy):
         player = self.player if maximizing else 1 - self.player
         moves = state.valid_moves(hand)
 
-        # A* ordering dentro del minimax
+        # A* ordering dentro del minimax.
+        # Para el nodo MIN (oponente) usamos probabilidades bayesianas
+        # para ordenar: primero las jugadas que el oponente más probablemente haría.
         if moves:
             g_local = 7 - len(hand)
             scored = []
-            for tile, side in moves:
-                ns_temp = state.apply_move(tile, side, player)
-                h = self._heuristic(ns_temp)
-                scored.append((g_local + h, tile, side))
+            if not maximizing and _original_state is not None:
+                # Nivel 1: priorizar jugadas del oponente según probabilidad
+                for tile, side in moves:
+                    ns_temp = state.apply_move(tile, side, player)
+                    h = self._heuristic(ns_temp, _original_state)
+                    prob = _original_state.prob_tile_in_opponent(tile)
+                    # Combinar heurística con probabilidad:
+                    # menor f_adj = más probable y mejor jugada para el oponente
+                    f_adj = (g_local + h) * (1.0 / max(prob, 0.05))
+                    scored.append((f_adj, tile, side))
+            else:
+                for tile, side in moves:
+                    ns_temp = state.apply_move(tile, side, player)
+                    h = self._heuristic(ns_temp, _original_state)
+                    scored.append((g_local + h, tile, side))
             scored.sort(key=lambda x: x[0])
             moves = [(t, s) for _, t, s in scored]
 
@@ -148,7 +163,8 @@ class HybridStrategy(AgentStrategy):
             ns = state.apply_pass(player)
             val = self._minimax(ns, depth - 1, alpha, beta, not maximizing,
                                 _root_depth=_root_depth,
-                                _parent_id=node_id, _move_label="pass")
+                                _parent_id=node_id, _move_label="pass",
+                                _original_state=_original_state)
             if rec and node_id >= 0:
                 rec.update_value(node_id, val)
             return val
@@ -160,7 +176,8 @@ class HybridStrategy(AgentStrategy):
                 val = max(val, self._minimax(ns, depth - 1, alpha, beta, False,
                                              _root_depth=_root_depth,
                                              _parent_id=node_id,
-                                             _move_label=f"{tile}\u2192{side}"))
+                                             _move_label=f"{tile}\u2192{side}",
+                                             _original_state=_original_state))
                 alpha = max(alpha, val)
                 if beta <= alpha:
                     remaining = len(moves) - i - 1
@@ -179,7 +196,8 @@ class HybridStrategy(AgentStrategy):
                 val = min(val, self._minimax(ns, depth - 1, alpha, beta, True,
                                              _root_depth=_root_depth,
                                              _parent_id=node_id,
-                                             _move_label=f"{tile}\u2192{side}"))
+                                             _move_label=f"{tile}\u2192{side}",
+                                             _original_state=_original_state))
                 beta = min(beta, val)
                 if beta <= alpha:
                     remaining = len(moves) - i - 1
@@ -192,13 +210,49 @@ class HybridStrategy(AgentStrategy):
                 rec.update_value(node_id, val)
             return val
 
-    def _heuristic(self, state) -> float:
+    def _heuristic(self, state: GameState,
+                   original_state: Optional[GameState] = None) -> float:
+        """
+        Heurística mejorada (Nivel 1).
+
+        Componentes:
+          - Manhattan + Euclidiana: distancia de fichas propias a los extremos
+          - block / pool: métricas clásicas de control
+          - threat_score: NUEVO — pondera cuánto "amenazan" las fichas del
+            oponente que probablemente tiene, usando prob_tile_in_opponent
+            sobre el estado original (donde la información es más fresca).
+
+        Menor valor = mejor para A* (es una función de costo).
+        """
         m = manhattan_distance(state, self.player)
         e = euclidean_distance(state, self.player)
         pool = pool_opportunity_score(state, self.player)
         block = opponent_blocking_score(state, self.player)
-        # Menor es mejor para A*: distancia pesa en contra, bloqueo/pozo favorecen.
-        return 0.45 * m + 0.45 * e - 0.05 * block - 0.05 * pool
+
+        # Nivel 1: threat_score basado en probabilidades del oponente
+        threat_score = 0.0
+        ref_state = original_state if original_state is not None else state
+        if ref_state.left_end is not None:
+            opp_hand_ref = (ref_state.opponent_hand if self.player == 0
+                            else ref_state.agent_hand)
+            total_threat = 0.0
+            for tile in opp_hand_ref:
+                prob = ref_state.prob_tile_in_opponent(tile)
+                fits = (tile.fits(state.left_end) or
+                        tile.fits(state.right_end))
+                # Si probablemente la tiene Y encaja en el tablero actual → amenaza
+                if fits:
+                    total_threat += prob
+            n = max(len(opp_hand_ref), 1)
+            threat_score = total_threat / n   # rango [0, 1]
+
+        # Menor es mejor para A*: distancias pesan en contra,
+        # bloqueo/pozo favorecen al agente, amenaza del oponente penaliza.
+        return (0.40 * m
+                + 0.40 * e
+                - 0.05 * block
+                - 0.05 * pool
+                + 0.10 * threat_score)   # ← nueva componente
 
     def _select_depth(self, state: GameState) -> int:
         hand = state.agent_hand if self.player == 0 else state.opponent_hand

@@ -80,13 +80,20 @@ class AStarStrategy(AgentStrategy):
 
             cur_hand = current_state.agent_hand if self.player == 0 else current_state.opponent_hand
             next_moves = current_state.valid_moves(cur_hand)
+
             for tile, side in next_moves:
                 ns2 = current_state.apply_move(tile, side, self.player)
-                opp_hand = ns2.opponent_hand if self.player == 0 else ns2.agent_hand
-                opp_moves = ns2.valid_moves(opp_hand)
+
+                # ── Nivel 2: simulación rival ponderada por probabilidades ──────
+                # En lugar de random.choice, elegimos la jugada del oponente
+                # priorizando las fichas que más probablemente tiene,
+                # usando la información del estado ORIGINAL (state).
+                opp_hand_sim = ns2.opponent_hand if self.player == 0 else ns2.agent_hand
+                opp_moves = ns2.valid_moves(opp_hand_sim)
+
                 if opp_moves:
-                    ot, os_ = random.choice(opp_moves)
-                    ns2 = ns2.apply_move(ot, os_, 1 - self.player)
+                    ns2 = self._simulate_opponent(ns2, opp_moves, state)
+
                 new_g = g + 1
                 new_h = self._heuristic(ns2)
                 new_f = new_g + new_h
@@ -107,7 +114,51 @@ class AStarStrategy(AgentStrategy):
             self.profiler.end_turn(str(best_move))
         return best_move
 
-    def _heuristic(self, state) -> float:
+    def _simulate_opponent(self, state: GameState, opp_moves: list,
+                           original_state: GameState) -> GameState:
+        """
+        Nivel 2: simula la jugada del oponente ponderando por la probabilidad
+        bayesiana de que realmente tenga cada ficha.
+
+        Estrategia:
+          1. Calcular prob_tile_in_opponent para cada ficha candidata
+             usando el estado ORIGINAL (información más fresca).
+          2. Si hay jugadas con prob > umbral, elegir entre esas con
+             distribución proporcional a la probabilidad.
+          3. Si todas tienen prob muy baja (oponente impredecible),
+             caer de vuelta a random.choice como antes.
+
+        Esto hace que A* anticipe mejor los movimientos reales del oponente
+        en lugar de asumir uniformidad.
+        """
+        opp_player = 1 - self.player
+
+        # Calcular probabilidades con el estado original (más información fresca)
+        weighted = []
+        total_prob = 0.0
+        for tile, side in opp_moves:
+            prob = original_state.prob_tile_in_opponent(tile)
+            weighted.append((prob, tile, side))
+            total_prob += prob
+
+        if total_prob < 1e-6:
+            # Todas las fichas son igualmente desconocidas → random como antes
+            ot, os_ = random.choice(opp_moves)
+            return state.apply_move(ot, os_, opp_player)
+
+        # Muestreo ponderado: elegir jugada proporcional a la probabilidad
+        r = random.uniform(0, total_prob)
+        cumulative = 0.0
+        chosen_tile, chosen_side = weighted[-1][1], weighted[-1][2]  # fallback
+        for prob, tile, side in weighted:
+            cumulative += prob
+            if r <= cumulative:
+                chosen_tile, chosen_side = tile, side
+                break
+
+        return state.apply_move(chosen_tile, chosen_side, opp_player)
+
+    def _heuristic(self, state: GameState) -> float:
         m = manhattan_distance(state, self.player)
         e = euclidean_distance(state, self.player)
         return (m + e) / 2.0
