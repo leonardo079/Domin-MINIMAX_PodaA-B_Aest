@@ -16,6 +16,6 @@ STRATEGY_DESCRIPTIONS = {
     "random": "Jugada aleatoria entre las válidas (baseline)",
     "manhattan": "Minimax + poda α-β con distancia Manhattan",
     "euclidean": "Minimax + poda α-β con distancia Euclidiana",
-    "astar": "Búsqueda A* pura (Manhattan + Euclidiana como heurística)",
-    "hybrid": "A* + Minimax + α-β + profundidad adaptativa + pozo",
+    "astar": "Best-first (A*) con heurística Manhattan+Euclidiana y simulación rival",
+    "hybrid": "A* + Minimax + α-β con top-k y profundidad adaptativa sensible al pozo",
 }

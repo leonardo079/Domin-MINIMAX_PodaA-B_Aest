@@ -11,8 +11,8 @@ API REST + SSE para la simulación y análisis comparativo de agentes inteligent
 | `random` | Baseline: jugada aleatoria entre las válidas |
 | `manhattan` | Minimax + poda α-β con heurística de distancia Manhattan |
 | `euclidean` | Minimax + poda α-β con heurística de distancia Euclidiana |
-| `astar` | Búsqueda A* pura (heurística combinada Manhattan + Euclidiana) |
-| `hybrid` | A* para filtrar candidatas → Minimax + poda α-β sobre el top-K |
+| `astar` | Best-first (A*) con heurística combinada Manhattan + Euclidiana y simulación rival |
+| `hybrid` | A* para priorizar candidatas + Minimax con poda α-β, top-K dinámico y profundidad adaptativa sensible al pozo |
 
 Todos los agentes registran por turno: `time_ms`, `nodes_expanded`, `eval_calls`, `max_depth`.
 
@@ -219,7 +219,7 @@ Estas gráficas requieren datos agregados de toda la partida y son más signific
 # Activar el entorno primero
 .\.venv\Scripts\Activate.ps1
 
-# Suite completa (96 tests)
+# Suite completa (98 tests)
 pytest
 
 # Solo tests unitarios (rápido, < 1s)
@@ -239,7 +239,7 @@ pytest --cov=app --cov-report=term-missing
 Resultado esperado:
 
 ```
-96 passed in ~3s
+98 passed in ~2s
 ```
 
 ---

@@ -11,7 +11,8 @@ Nota sobre qué graficar:
   - TIEMPO REAL (por turno, durante la partida):
       time_ms, nodes_expanded, eval_calls, max_depth, hand_size, board_length
   - POST-PARTIDA (al finalizar):
-      win_rate, score_advantage_convergence, turn_distribution, cumulative_costs, radar_comparison
+      cost_comparison, cumulative_time_ms, cumulative_nodes, depth_distribution,
+      radar, pip_balance
 """
 from fastapi import APIRouter, HTTPException
 
