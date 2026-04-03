@@ -1,6 +1,0 @@
-matchup,agent_a,agent_b,wins_a,wins_b,draws,win_rate_a,win_rate_b,n_games
-Minimax(Manhattan) vs Random,manhattan,random,60,40,0,60.0,40.0,100
-A*(Manhattan) vs Random,astar,random,68,32,0,68.0,32.0,100
-Manhattan vs Euclidean,manhattan,euclidean,45,55,0,45.0,55.0,100
-Hybrid vs Minimax(Manhattan),hybrid,manhattan,39,61,0,39.0,61.0,100
-Hybrid vs Random,hybrid,random,53,46,1,53.0,46.0,100
