@@ -12,6 +12,8 @@ Todas las estrategias importan directamente desde aquí; no duplican lógica.
 """
 import math
 
+from app.core.game_state import generate_all_tiles
+
 
 def manhattan_distance(state, player: int = 0) -> float:
     """
@@ -103,29 +105,44 @@ def evaluate(
       use_euclidean  — incluir distancia Euclidiana en dist_score
       use_pool       — incluir oportunidad de pozo en el cómputo
     """
-    opponent = 1 - player
+    # Usamos probabilidades para estimar el valor de la información rival
+    # en vez de leer directamente su mano.
+    all_tiles = generate_all_tiles()
+    unknown_tiles = [t for t in all_tiles if t not in state.agent_hand]
 
-    # 1. pip_score: diferencia de pips normalizada
+    # 1. pip_score: diferencia entre pips propios y pips rivales esperados
     agent_pips = state.pip_sum(player)
-    opp_pips = state.pip_sum(opponent)
+    expected_opp_pips = sum(
+        tile.pips() * state.prob_tile_in_opponent(tile)
+        for tile in unknown_tiles
+    )
     max_pips = 6 * 7 * 2
-    pip_score = (opp_pips - agent_pips) / max_pips
+    pip_score = (expected_opp_pips - agent_pips) / max_pips
 
-    # 2. control_ends: fichas del agente que encajan en extremos actuales
-    opp_hand = state.opponent_hand if player == 0 else state.agent_hand
+    # 2. control_ends: fichas propias que encajan vs. fichas rivales esperadas
     if state.left_end is not None:
         agent_hand = state.agent_hand if player == 0 else state.opponent_hand
         agent_fits = sum(1 for t in agent_hand
                          if t.fits(state.left_end) or t.fits(state.right_end))
-        opp_fits = sum(1 for t in opp_hand
-                       if t.fits(state.left_end) or t.fits(state.right_end))
-        control_score = (agent_fits - opp_fits) / max(len(agent_hand) + len(opp_hand), 1)
+        expected_opp_fits = sum(
+            state.prob_tile_in_opponent(tile)
+            for tile in unknown_tiles
+            if tile.fits(state.left_end) or tile.fits(state.right_end)
+        )
+        control_score = (agent_fits - expected_opp_fits) / 7.0
     else:
         control_score = 0.0
 
-    # 3. block_score: si el oponente tiene pocas jugadas válidas
-    opp_moves = state.valid_moves(opp_hand)
-    block_score = 1.0 - (len(opp_moves) / max(len(opp_hand), 1))
+    # 3. block_score: si el oponente tiene pocas jugadas válidas esperadas
+    if state.left_end is None:
+        block_score = 0.0
+    else:
+        expected_opp_moves = sum(
+            state.prob_tile_in_opponent(tile)
+            for tile in unknown_tiles
+            if tile.fits(state.left_end) or tile.fits(state.right_end)
+        )
+        block_score = 1.0 - min(1.0, expected_opp_moves / 7.0)
 
     # 4. dist_score: combinación ponderada de distancias habilitadas
     dist_score = 0.0

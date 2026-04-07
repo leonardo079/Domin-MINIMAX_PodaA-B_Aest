@@ -4,20 +4,6 @@ API REST + SSE para la simulación y análisis comparativo de agentes inteligent
 
 ---
 
-## Algoritmos implementados
-
-| Estrategia | Descripción |
-|---|---|
-| `random` | Baseline: jugada aleatoria entre las válidas |
-| `manhattan` | Minimax + poda α-β con heurística de distancia Manhattan |
-| `euclidean` | Minimax + poda α-β con heurística de distancia Euclidiana |
-| `astar` | Best-first (A*) con heurística combinada Manhattan + Euclidiana y simulación rival |
-| `hybrid` | A* para priorizar candidatas + Minimax con poda α-β, top-K dinámico y profundidad adaptativa sensible al pozo |
-
-Todos los agentes registran por turno: `time_ms`, `nodes_expanded`, `eval_calls`, `max_depth`.
-
----
-
 ## Estructura del proyecto
 
 ```
